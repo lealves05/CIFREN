@@ -1,0 +1,71 @@
+name: Testes + backup (branch cloudflare)
+
+# O CIFREN roda só na VPS (GitHub + VPS): a VPS se atualiza sozinha pela branch "cloudflare".
+# Aqui: 1) testes da API num PostgreSQL com papel sem superusuário (a RLS vale como na VPS) e build do site;
+#       2) backup da versão (zip + SHA-256) guardado como Release permanente backup/CIFREN_vNNN_...
+on:
+  push:
+    branches: [cloudflare]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cifren-vps
+  cancel-in-progress: false
+
+jobs:
+  testes:
+    name: 1. Testes da API e build do site
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22 }
+      - name: Banco de teste (papel sem superusuário)
+        env: { PGPASSWORD: postgres }
+        run: |
+          psql -h localhost -U postgres -c "create role cifren_app login password 'cifren_app' nosuperuser nobypassrls"
+          psql -h localhost -U postgres -c "create database cifren_test owner cifren_app"
+      - name: Testes da API
+        working-directory: backend
+        run: npm ci && npm test
+      - name: Build do site
+        working-directory: frontend
+        run: npm ci && npm run build
+
+  backup:
+    name: 2. Backup da versão
+    needs: testes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v5
+        with: { node-version: 22 }
+      - name: Gerar o zip (versão sequencial pelas Releases)
+        id: bk
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          mkdir -p backups
+          gh release list --limit 1000 --json tagName -q '.[].tagName' 2>/dev/null | grep -o '^backup/CIFREN_v[0-9]*' | sed 's/.*_v//' | sort -n | tail -1 > /tmp/ultima || true
+          ULT=$(cat /tmp/ultima 2>/dev/null || echo 0); ULT=${ULT:-0}
+          i=1; while [ "$i" -le "$ULT" ]; do touch "backups/CIFREN_v$(printf '%03d' "$i")_marcador.zip"; i=$((i+1)); done
+          node backup-sistema.mjs --sistema CIFREN --repo . --ref cloudflare --destino backups
+          rm -f backups/*_marcador.zip
+          ARQ=$(ls backups/CIFREN_v*.zip | head -1)
+          echo "arquivo=$(basename "$ARQ")" >> "$GITHUB_OUTPUT"
+      - name: Guardar como Release permanente
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          ARQ="${{ steps.bk.outputs.arquivo }}"
+          gh release create "backup/${ARQ%.zip}" "backups/$ARQ" "backups/historico-backups.csv" --target "$GITHUB_SHA" \
+            --title "Backup $ARQ" --notes "Backup automático da versão (commit ${GITHUB_SHA:0:12}). SHA-256 em historico-backups.csv."
