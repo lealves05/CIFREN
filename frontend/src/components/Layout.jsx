@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { ChevronDown, LogOut, UserRound, Building2, Check, MoreHorizontal, Clock, Repeat } from 'lucide-react';
+import { ChevronDown, LogOut, UserRound, Building2, Check, MoreHorizontal, Clock, Repeat, Send, Map as MapIcon } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useUI } from '../context/UIContext';
-import { visibleNav } from '../lib/nav';
+import { visibleGroups, visibleNav, OVERVIEW } from '../lib/nav';
 import { daysUntil, date, plural } from '../lib/format';
-import { errorMessage } from '../lib/api';
+import { api, errorMessage, EVENTS } from '../lib/api';
+import { P, APPROVER_PERMS } from '../lib/permissions';
+import { readPref, writePref } from '../lib/storage';
 import { Logo } from './Brand';
 import { Avatar, cx, Spinner } from './ui';
+import NotificationBell from './NotificationBell';
+import Modal from './Modal';
+import DocumentCapture from './DocumentCapture';
 
 function useClickOutside(ref, onOut) {
   useEffect(() => {
@@ -119,46 +124,135 @@ function TrialBanner() {
   );
 }
 
-const BOTTOM = ['/', '/pagar', '/receber', '/cadastros'];
+/** Atalhos da barra inferior do celular (Enviar e Mais são botões próprios). */
+export const BOTTOM = ['/', '/pagar', '/receber'];
+
+/** Contador de aprovações pendentes que a pessoa pode decidir. */
+function useApprovalCount() {
+  const { can, org } = useAuth();
+  const [n, setN] = useState(0);
+  const allowed = can(...APPROVER_PERMS);
+  useEffect(() => {
+    if (!allowed) { setN(0); return undefined; }
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await api.get('/approvals?status=pendente');
+        if (alive) setN((res?.items || []).filter((a) => a.can_decide !== false).length);
+      } catch { /* contador é secundário */ }
+    };
+    load();
+    const t = setInterval(load, 120000);
+    window.addEventListener(EVENTS.countsChanged, load);
+    return () => { alive = false; clearInterval(t); window.removeEventListener(EVENTS.countsChanged, load); };
+  }, [allowed, org?.id]);
+  return n;
+}
+
+const GROUP_PREF = 'cifren.menu.fechados';
+
+function SideNav({ counts }) {
+  const { can, moduleOn } = useAuth();
+  const location = useLocation();
+  const groups = visibleGroups(can, moduleOn);
+  const [closed, setClosed] = useState(() => new Set((readPref(GROUP_PREF) || '').split(',').filter(Boolean)));
+  const toggle = (k) => setClosed((s) => {
+    const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k);
+    writePref(GROUP_PREF, [...n].join(','));
+    return n;
+  });
+  const link = (n, sub) => (
+    <NavLink key={n.to} to={n.to} end={n.end}
+      className={({ isActive }) => cx('focus-ring flex items-center gap-3 rounded-app-sm px-3 py-2 text-sm font-medium transition', sub && 'pl-5',
+        isActive ? 'bg-brand-soft text-brand-fg shadow-[inset_3px_0_0_rgb(var(--accent))]' : 'text-brand-fg/75 hover:bg-brand-soft/70 hover:text-brand-fg')}>
+      <n.icon className="h-[18px] w-[18px] shrink-0" aria-hidden="true" /> <span className="flex-1 truncate">{n.label}</span>
+      {n.badge && counts[n.badge] > 0 && <span className="rounded-full bg-cta px-1.5 text-[11px] font-bold text-cta-fg" aria-label={`${counts[n.badge]} pendentes`}>{counts[n.badge]}</span>}
+    </NavLink>
+  );
+  return (
+    <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 pb-2">
+      {groups.map((g) => {
+        if (!g.label) return g.items.map((n) => link(n));
+        const active = g.items.some((n) => location.pathname.startsWith(n.to));
+        const isOpen = active || !closed.has(g.key);
+        const total = g.items.reduce((a, n) => a + (n.badge ? counts[n.badge] || 0 : 0), 0);
+        return (
+          <div key={g.key} className="pt-1">
+            <button type="button" aria-expanded={isOpen} onClick={() => !active && toggle(g.key)}
+              className="focus-ring flex w-full items-center gap-3 rounded-app-sm px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-brand-fg/60 hover:text-brand-fg">
+              <g.icon className="h-4 w-4 shrink-0" aria-hidden="true" /><span className="flex-1">{g.label}</span>
+              {!isOpen && total > 0 && <span className="rounded-full bg-cta px-1.5 text-[11px] font-bold normal-case tracking-normal text-cta-fg">{total}</span>}
+              <ChevronDown className={cx('h-3.5 w-3.5 transition', isOpen && 'rotate-180', active && 'opacity-0')} aria-hidden="true" />
+            </button>
+            {isOpen && <div className="space-y-0.5">{g.items.map((n) => link(n, true))}</div>}
+          </div>
+        );
+      })}
+    </nav>
+  );
+}
+
+/** Aviso quando a organização exige 2 etapas e a pessoa ainda não ativou. */
+function useMfaGate() {
+  const navigate = useNavigate();
+  const { toast } = useUI();
+  const last = useRef(0);
+  useEffect(() => {
+    const on = () => {
+      if (Date.now() - last.current < 5000) return;
+      last.current = Date.now();
+      toast('Sua organização exige a verificação em duas etapas. Ative para continuar usando o CIFREN.', 'error');
+      navigate('/conta?exigir2etapas=1');
+    };
+    window.addEventListener(EVENTS.mfaRequired, on);
+    return () => window.removeEventListener(EVENTS.mfaRequired, on);
+  }, [navigate, toast]);
+}
 
 export default function Layout() {
-  const { can } = useAuth();
+  const { can, moduleOn } = useAuth();
   const location = useLocation();
-  const nav = visibleNav(can);
-  const bottom = nav.filter((n) => BOTTOM.includes(n.to));
+  const navigate = useNavigate();
+  const nav = visibleNav(can, moduleOn);
+  const bottom = BOTTOM.map((to) => nav.find((n) => n.to === to)).filter(Boolean);
+  const canSend = can(P.docsUpload) && moduleOn('documentos_ia');
   const mainRef = useRef(null);
+  const [capture, setCapture] = useState(false);
+  const approvals = useApprovalCount();
+  useMfaGate();
 
   // ao trocar de tela, leva o foco ao conteúdo (leitores de tela anunciam a nova página)
   useEffect(() => { mainRef.current?.focus({ preventScroll: true }); try { window.scrollTo(0, 0); } catch { /* ambiente sem rolagem */ } }, [location.pathname]);
 
+  const tab = (active) => cx('focus-ring flex w-full flex-col items-center gap-0.5 py-2 text-[11px] font-medium', active ? 'text-positive' : 'text-ink-faint');
+
   return (
     <div className="flex min-h-screen">
       <a href="#conteudo" className="sr-only z-50 rounded bg-surface px-3 py-2 focus:not-sr-only focus:fixed focus:left-2 focus:top-2">Pular para o conteúdo</a>
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col bg-brand text-brand-fg md:flex" aria-label="Menu principal">
+      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col bg-brand text-brand-fg md:flex" aria-label="Menu principal">
         <div className="px-4 py-5"><Logo light /></div>
-        <nav className="flex-1 space-y-0.5 overflow-y-auto px-2">
-          {nav.map((n) => (
-            <NavLink key={n.to} to={n.to} end={n.end}
-              className={({ isActive }) => cx('focus-ring flex items-center gap-3 rounded-app-sm px-3 py-2.5 text-sm font-medium transition',
-                isActive ? 'bg-brand-soft text-brand-fg shadow-[inset_3px_0_0_rgb(var(--accent))]' : 'text-brand-fg/75 hover:bg-brand-soft/70 hover:text-brand-fg')}>
-              <n.icon className="h-[18px] w-[18px] shrink-0" aria-hidden="true" /> {n.label}
-            </NavLink>
-          ))}
-        </nav>
-        <p className="px-4 py-4 text-[11px] text-brand-fg/60">Um sistema LORLER</p>
+        <SideNav counts={{ approvals }} />
+        <div className="border-t border-white/10 px-2 py-2">
+          <NavLink to={OVERVIEW.to} className={({ isActive }) => cx('focus-ring flex items-center gap-3 rounded-app-sm px-3 py-2 text-xs font-medium', isActive ? 'bg-brand-soft text-brand-fg' : 'text-brand-fg/70 hover:text-brand-fg')}>
+            <MapIcon className="h-4 w-4" aria-hidden="true" /> {OVERVIEW.label}
+          </NavLink>
+          <p className="px-3 pt-1 text-[11px] text-brand-fg/60">Um sistema LORLER</p>
+        </div>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TrialBanner />
-        <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-line bg-surface/95 px-3 py-2 backdrop-blur sm:px-5">
+        <header className="sticky top-0 z-30 flex items-center gap-1 border-b border-line bg-surface/95 px-3 py-2 backdrop-blur sm:gap-2 sm:px-5">
           <Link to="/" className="md:hidden" aria-label="CIFREN, ir para o início"><Logo compact /></Link>
           <div className="min-w-0 flex-1"><OrgSwitcher /></div>
           <CompanyFilter className="hidden sm:block" />
+          {canSend && <button type="button" className="btn-outline hidden md:inline-flex" onClick={() => setCapture(true)}><Send className="h-4 w-4" aria-hidden="true" /> Enviar documento</button>}
+          <NotificationBell />
           <UserMenu />
         </header>
         <div className="border-b border-line bg-surface px-3 py-2 sm:hidden"><CompanyFilter className="[&_select]:max-w-none" /></div>
 
-        <main id="conteudo" ref={mainRef} tabIndex={-1} className="mx-auto w-full max-w-7xl flex-1 px-4 pb-28 pt-5 outline-none sm:px-6 md:pb-10">
+        <main id="conteudo" ref={mainRef} tabIndex={-1} className="mx-auto w-full min-w-0 max-w-7xl flex-1 px-4 pb-28 pt-5 outline-none sm:px-6 md:pb-10">
           <Outlet />
         </main>
       </div>
@@ -167,18 +261,31 @@ export default function Layout() {
         <ul className="flex">
           {bottom.map((n) => (
             <li key={n.to} className="flex-1">
-              <NavLink to={n.to} end={n.end} className={({ isActive }) => cx('focus-ring flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium', isActive ? 'text-positive' : 'text-ink-faint')}>
+              <NavLink to={n.to} end={n.end} className={({ isActive }) => tab(isActive)}>
                 <n.icon className="h-5 w-5" aria-hidden="true" /> {n.short}
               </NavLink>
             </li>
           ))}
+          {canSend && (
+            <li className="flex-1">
+              <button type="button" className={tab(false)} onClick={() => setCapture(true)}>
+                <span className="-mt-0.5 grid h-7 w-7 place-items-center rounded-full bg-cta text-cta-fg"><Send className="h-4 w-4" aria-hidden="true" /></span> Enviar
+              </button>
+            </li>
+          )}
           <li className="flex-1">
-            <NavLink to="/mais" className={({ isActive }) => cx('focus-ring flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium', isActive ? 'text-positive' : 'text-ink-faint')}>
-              <MoreHorizontal className="h-5 w-5" aria-hidden="true" /> Mais
+            <NavLink to="/mais" className={({ isActive }) => tab(isActive)}>
+              <span className="relative"><MoreHorizontal className="h-5 w-5" aria-hidden="true" />
+                {approvals > 0 && <span className="absolute -right-2 -top-1 rounded-full bg-cta px-1 text-[10px] font-bold text-cta-fg">{approvals}</span>}</span> Mais
             </NavLink>
           </li>
         </ul>
       </nav>
+
+      <Modal open={capture} onClose={() => setCapture(false)} title="Enviar documento"
+        subtitle="Nota fiscal, boleto, Pix ou comprovante. O CIFREN lê os dados para você.">
+        <DocumentCapture compact onCreated={(doc) => { setCapture(false); if (doc?.id) navigate(`/documentos/${doc.id}`); }} />
+      </Modal>
     </div>
   );
 }

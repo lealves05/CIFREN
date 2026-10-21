@@ -18,7 +18,12 @@ export class ApiError extends Error {
 export const EVENTS = {
   unauthorized: 'cifren:unauthorized',
   blocked: 'cifren:blocked',
+  mfaRequired: 'cifren:mfa-required',
+  countsChanged: 'cifren:counts-changed',
 };
+
+/** Avisa o menu (contador de aprovações, sino) que algo mudou. */
+export const notifyCountsChanged = () => { try { window.dispatchEvent(new CustomEvent(EVENTS.countsChanged)); } catch { /* sem window */ } };
 
 async function request(method, path, body) {
   const write = method !== 'GET';
@@ -41,6 +46,7 @@ async function request(method, path, body) {
   if (!res.ok) {
     if (res.status === 401) window.dispatchEvent(new CustomEvent(EVENTS.unauthorized, { detail: { path } }));
     if (res.status === 402) window.dispatchEvent(new CustomEvent(EVENTS.blocked, { detail: data }));
+    if (res.status === 403 && data?.code === 'MFA_SETUP_REQUIRED') window.dispatchEvent(new CustomEvent(EVENTS.mfaRequired, { detail: data }));
     throw new ApiError(res.status, data);
   }
   return data;
@@ -62,11 +68,24 @@ export const qs = (obj) => {
 };
 
 export const isFeatureDisabled = (err) => err?.status === 403 && err?.code === 'FEATURE_DISABLED';
+export const isMfaRequired = (err) => err?.status === 403 && err?.code === 'MFA_SETUP_REQUIRED';
+export const isAiNotConfigured = (err) => err?.code === 'AI_NOT_CONFIGURED';
+export const isApprovalRequired = (err) => err?.code === 'APPROVAL_REQUIRED';
+export const isDuplicate = (err) => err?.code === 'DUPLICATE';
+
+/** Textos de reserva quando a API não manda mensagem para um código conhecido. */
+const CODE_TEXT = {
+  MFA_SETUP_REQUIRED: 'Sua organização exige a verificação em duas etapas. Ative em Minha conta para continuar.',
+  AI_NOT_CONFIGURED: 'A inteligência artificial ainda não está ligada. Quem administra a conta ativa em Configurações › IA.',
+  APPROVAL_REQUIRED: 'Esta conta precisa ser aprovada antes de ser paga.',
+  DUPLICATE: 'Este documento já foi lançado antes. Confira as contas existentes para não pagar duas vezes.',
+};
 
 /** Mensagem amigável para mostrar ao usuário. */
 export function errorMessage(err) {
   if (!err) return '';
   if (isFeatureDisabled(err)) return 'Este módulo não faz parte do seu plano atual.';
+  if (err.code && CODE_TEXT[err.code] && !err.data?.error) return CODE_TEXT[err.code];
   if (err.status === 403 && !err.data?.error) return 'Você não tem permissão para fazer isso. Fale com o responsável pela conta.';
   return err.message || 'Algo deu errado. Tente de novo.';
 }

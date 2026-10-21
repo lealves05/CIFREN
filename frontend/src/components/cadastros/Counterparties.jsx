@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Plus, Search, Pencil, Archive, Users } from 'lucide-react';
 import { api, qs, errorMessage } from '../../lib/api';
 import { useAsync } from '../../lib/useAsync';
-import { maskDocument, documentHint, maskPhone, onlyDigits } from '../../lib/masks';
+import { maskDocument, documentHint, maskPhone, onlyDigits, isMasked, showMasked } from '../../lib/masks';
 import { useUI } from '../../context/UIContext';
 import Modal from '../Modal';
 import { Input, Select, Textarea, InlineError, SubmitButton, Loading, ErrorState, EmptyState, Badge } from '../ui';
@@ -20,16 +20,27 @@ function Form({ open, onClose, item, onSaved }) {
   useEffect(() => {
     if (!open) return;
     setError(''); setTouched(false);
-    setF({ kind: item?.kind || 'fornecedor', name: item?.name || '', document: maskDocument(item?.document || ''), email: item?.email || '', phone: maskPhone(item?.phone || ''), notes: item?.notes || '' });
+    setF({
+      kind: item?.kind || 'fornecedor', name: item?.name || '', notes: item?.notes || '',
+      // dados mascarados (sem permissão de dados sensíveis) não podem ser editados nem reenviados
+      document: isMasked(item?.document, item) ? item.document : maskDocument(item?.document || ''),
+      email: item?.email || '', phone: isMasked(item?.phone, item) ? item.phone : maskPhone(item?.phone || ''),
+    });
   }, [open, item]);
   const set = (k, mask) => (e) => setF((x) => ({ ...x, [k]: mask ? mask(e.target.value) : e.target.value }));
-  const dh = documentHint(f.document);
+  const lockDoc = isMasked(item?.document, item) && !!item?.document;
+  const lockEmail = isMasked(item?.email, item) && !!item?.email;
+  const lockPhone = isMasked(item?.phone, item) && !!item?.phone;
+  const dh = lockDoc ? '' : documentHint(f.document);
   const submit = async () => {
     setTouched(true); setError('');
     if (!f.name?.trim() || dh) return;
     setSaving(true);
     try {
-      const body = { kind: f.kind, name: f.name.trim(), document: onlyDigits(f.document) ? f.document : null, email: f.email.trim() || null, phone: f.phone || null, notes: f.notes.trim() || null };
+      const body = { kind: f.kind, name: f.name.trim(), notes: f.notes.trim() || null };
+      if (!lockDoc) body.document = onlyDigits(f.document) ? f.document : null;
+      if (!lockEmail) body.email = f.email.trim() || null;
+      if (!lockPhone) body.phone = f.phone || null;
       if (item) await api.put(`/counterparties/${item.id}`, body); else await api.post('/counterparties', body);
       toast(item ? 'Cadastro atualizado.' : 'Cadastro criado.');
       onSaved(); onClose();
@@ -42,10 +53,10 @@ function Form({ open, onClose, item, onSaved }) {
         <InlineError error={error} />
         <div className="grid gap-4 sm:grid-cols-2">
           <Select label="Tipo" value={f.kind} onChange={set('kind')}>{KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}</Select>
-          <Input label="CPF ou CNPJ" inputMode="numeric" value={f.document} onChange={set('document', maskDocument)} error={touched ? dh : ''} hint="Opcional." />
+          <Input label="CPF ou CNPJ" inputMode="numeric" value={f.document} onChange={set('document', maskDocument)} error={touched ? dh : ''} disabled={lockDoc} hint={lockDoc ? 'Dado protegido: seu perfil não vê o número completo.' : 'Opcional.'} />
           <Input className="sm:col-span-2" label="Nome" required value={f.name} onChange={set('name')} error={touched && !f.name?.trim() ? 'Informe o nome.' : ''} maxLength={200} data-autofocus />
-          <Input label="E-mail" type="email" value={f.email} onChange={set('email')} />
-          <Input label="Telefone" type="tel" inputMode="tel" value={f.phone} onChange={set('phone', maskPhone)} />
+          <Input label="E-mail" type="email" value={f.email} onChange={set('email')} disabled={lockEmail} hint={lockEmail ? 'Dado protegido.' : undefined} />
+          <Input label="Telefone" type="tel" inputMode="tel" value={f.phone} onChange={set('phone', maskPhone)} disabled={lockPhone} hint={lockPhone ? 'Dado protegido.' : undefined} />
         </div>
         <Textarea label="Observações" value={f.notes} onChange={set('notes')} rows={2} />
       </div>
@@ -84,8 +95,8 @@ export default function Counterparties({ canManage }) {
           {items.map((it) => (
             <li key={it.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2 font-medium">{it.name}<Badge>{kindLabel(it.kind)}</Badge></div>
-                <div className="truncate text-xs text-ink-faint">{[it.document && maskDocument(it.document), it.phone && maskPhone(it.phone), it.email].filter(Boolean).join(' · ') || 'Sem documento ou contato'}</div>
+                <div className="flex flex-wrap items-center gap-2 font-medium">{it.name}<Badge>{kindLabel(it.kind)}</Badge>{it.masked && <Badge tone="neutral">dados protegidos</Badge>}</div>
+                <div className="truncate text-xs text-ink-faint">{[it.document && showMasked(it.document, maskDocument), it.phone && showMasked(it.phone, maskPhone), it.email].filter(Boolean).join(' · ') || 'Sem documento ou contato'}</div>
               </div>
               {canManage && (
                 <div className="flex gap-1">

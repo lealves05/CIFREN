@@ -80,7 +80,7 @@ body {
   .btn-icon { @apply btn px-0 aspect-square; }
   .btn-sm { min-height: 2rem; @apply px-2.5 text-xs; }
   .input {
-    @apply w-full rounded-app-sm border border-line bg-surface px-3 text-sm text-ink placeholder:text-ink-faint
+    @apply w-full min-w-0 rounded-app-sm border border-line bg-surface px-3 text-sm text-ink placeholder:text-ink-faint
            outline-none transition focus:border-accent focus:ring-4 focus:ring-accent/20
            disabled:bg-muted disabled:text-ink-faint;
     min-height: var(--row);
@@ -92,6 +92,7 @@ body {
   .chip { @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium; }
   .table-clean { @apply w-full text-sm; }
   .table-clean th { @apply px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wide text-ink-faint border-b border-line; }
+  .table-clean tbody th { @apply normal-case tracking-normal text-sm text-ink border-b border-line/70; }
   .table-clean td { @apply px-4 py-3 border-b border-line/70 align-middle; }
   .table-clean tbody tr { @apply hover:bg-muted/60 transition; }
   .focus-ring { @apply focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/40; }

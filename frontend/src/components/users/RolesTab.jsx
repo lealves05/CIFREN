@@ -138,7 +138,7 @@ export default function RolesTab({ data, reload }) {
         <p className="text-sm text-ink-faint">Perfis definem o que cada pessoa pode ver e fazer. Permissões de <strong className="text-danger">risco alto</strong> mexem com dinheiro ou acessos: libere com cuidado.</p>
         <button type="button" className="btn-primary" onClick={() => setCreating(true)}><Plus className="h-4 w-4" aria-hidden="true" /> Novo perfil</button>
       </div>
-      <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[240px_1fr]">
         <div role="listbox" aria-label="Perfis" className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible">
           {roles.map((r) => (
             <button key={r.id} type="button" role="option" aria-selected={r.id === selected} onClick={() => setSelected(r.id)}

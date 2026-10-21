@@ -85,3 +85,35 @@ export const INTERVALS = [
   { value: 'semanal', label: 'Toda semana' },
   { value: 'anual', label: 'Todo ano' },
 ];
+
+const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+const MESES_LONGO = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+/** "2026-03" → "mar/26" */
+export function monthShort(m) {
+  const x = String(m || '').match(/^(\d{4})-(\d{2})/);
+  return x ? `${MESES[Number(x[2]) - 1]}/${x[1].slice(2)}` : String(m || '');
+}
+/** "2026-03" → "março de 2026" */
+export function monthLong(m) {
+  const x = String(m || '').match(/^(\d{4})-(\d{2})/);
+  return x ? `${MESES_LONGO[Number(x[2]) - 1]} de ${x[1]}` : String(m || '');
+}
+/** Mês atual (ou deslocado) no formato YYYY-MM. */
+export function thisMonth(offset = 0) {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + offset);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+export const pct = (v, digits = 1) => `${(Number(v) || 0).toLocaleString('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`;
+
+export const FREQUENCIES = [
+  { value: 'mensal', label: 'Todo mês' },
+  { value: 'bimestral', label: 'A cada 2 meses' },
+  { value: 'trimestral', label: 'A cada 3 meses' },
+  { value: 'semestral', label: 'A cada 6 meses' },
+  { value: 'anual', label: 'Todo ano' },
+  { value: 'quinzenal', label: 'A cada 15 dias' },
+  { value: 'semanal', label: 'Toda semana' },
+];
+export const frequencyLabel = (v) => FREQUENCIES.find((f) => f.value === v)?.label || v || '—';

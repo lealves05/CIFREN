@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Wallet, AlertTriangle, CalendarClock, ArrowDownToLine, ArrowUpFromLine, CheckCircle2, Circle, Plus, Landmark, LayoutDashboard } from 'lucide-react';
+import { Wallet, AlertTriangle, CalendarClock, ArrowDownToLine, ArrowUpFromLine, CheckCircle2, Circle, Plus, Landmark, LayoutDashboard, ClipboardCheck, FileText, Repeat, Lightbulb, Map as MapIcon, ChevronRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api, qs } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
@@ -9,6 +9,8 @@ import { money, moneyCompact, date, dayMonth, plural } from '../lib/format';
 import { statusInfo, canSettle } from '../lib/titles';
 import { PageHeader, Loading, ErrorState, Badge, cx } from '../components/ui';
 import { useTitleActions } from '../components/titles/useTitleActions';
+import InsightCard from '../components/InsightCard';
+import { APPROVER_PERMS } from '../lib/permissions';
 
 function Kpi({ label, value, sub, icon: Icon, tone = 'neutral', to }) {
   const tones = {
@@ -130,8 +132,51 @@ function Onboarding({ hasAccount, hasTitle, canAccounts, canTitles }) {
   );
 }
 
+function Pending({ d, can, moduleOn }) {
+  const cards = [
+    can(...APPROVER_PERMS) && { n: d.pending_approvals, label: 'aprovação pendente', many: 'aprovações pendentes', to: '/aprovacoes', icon: ClipboardCheck, empty: 'Nada para aprovar' },
+    can(P.reconImport, P.reconMatch) && moduleOn('conciliacao_bancaria') && { n: d.reconciliation_pending, label: 'linha do extrato para conciliar', many: 'linhas do extrato para conciliar', to: '/conciliacao', icon: Landmark, empty: 'Extrato em dia' },
+    can(P.docsView, P.docsUpload, P.docsManage) && moduleOn('documentos_ia') && { n: d.documents_pending, label: 'documento para lançar', many: 'documentos para lançar', to: '/documentos', icon: FileText, empty: 'Nenhum documento parado' },
+  ].filter((c) => c && c.n != null);
+  if (!cards.length) return null;
+  return (
+    <section aria-label="Pendências" className="mt-4 grid gap-3 sm:grid-cols-3">
+      {cards.map((c) => (
+        <Link key={c.to} to={c.to} className={cx('card flex items-center gap-3 p-4 transition hover:border-accent/60', c.n > 0 && 'border-cta/50')}>
+          <span className={cx('grid h-10 w-10 shrink-0 place-items-center rounded-full', c.n > 0 ? 'bg-cta/15 text-warn' : 'bg-accent/10 text-positive')}><c.icon className="h-5 w-5" aria-hidden="true" /></span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-lg font-semibold tabular-nums">{c.n > 0 ? c.n : <CheckCircle2 className="inline h-5 w-5 text-positive" aria-hidden="true" />}</span>
+            <span className="block text-xs text-ink-faint">{c.n > 0 ? (c.n === 1 ? c.label : c.many) : c.empty}</span>
+          </span>
+          <ChevronRight className="h-4 w-4 text-ink-faint" aria-hidden="true" />
+        </Link>
+      ))}
+    </section>
+  );
+}
+
+function MissingRecurring({ items, canOpen }) {
+  if (!items?.length) return null;
+  return (
+    <section className="card mt-4" aria-labelledby="rec-miss-t">
+      <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
+        <h2 id="rec-miss-t" className="flex items-center gap-2 text-sm font-semibold"><Repeat className="h-4 w-4 text-accent" aria-hidden="true" /> Contas recorrentes que ainda não chegaram</h2>
+        {canOpen && <Link to="/recorrentes" className="text-sm font-medium text-positive hover:underline">Ver todas</Link>}
+      </div>
+      <ul className="divide-y divide-line">
+        {items.map((r, i) => (
+          <li key={`${r.name}-${i}`} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm">
+            <span className="min-w-0"><span className="font-medium">{r.name}</span><span className="block text-xs text-ink-faint">vence {date(r.due_date)} · valor estimado</span></span>
+            <span className="tabular-nums text-ink-soft">≈ {money(r.estimated)}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export default function Dashboard() {
-  const { companyId, can, user } = useAuth();
+  const { companyId, can, user, moduleOn } = useAuth();
   const { data, error, loading, reload } = useAsync(() => api.get(`/dashboard${qs({ company_id: companyId })}`), [companyId]);
   const actions = useTitleActions({ kind: 'pagar', onChanged: reload });
 
@@ -151,7 +196,8 @@ export default function Dashboard() {
 
   return (
     <div>
-      <PageHeader title={first ? `Olá, ${first}` : 'Início'} icon={LayoutDashboard} subtitle="Resumo do seu dinheiro hoje." />
+      <PageHeader title={first ? `Olá, ${first}` : 'Início'} icon={LayoutDashboard} subtitle="Resumo do seu dinheiro hoje."
+        actions={<Link to="/visao-geral" className="btn-outline"><MapIcon className="h-4 w-4 text-accent" aria-hidden="true" /> Conheça o CIFREN</Link>} />
       {fresh && <Onboarding hasAccount={hasAccount} hasTitle={hasTitle} canAccounts={can(P.accountsManage)} canTitles={can(P.titlesCreate)} />}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -176,6 +222,20 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      <Pending d={d} can={can} moduleOn={moduleOn} />
+
+      {(d.insights || []).length > 0 && (
+        <section className="mt-4" aria-labelledby="ins-t">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 id="ins-t" className="flex items-center gap-2 text-sm font-semibold"><Lightbulb className="h-4 w-4 text-cta" aria-hidden="true" /> Fique de olho</h2>
+            {can(P.aiUse, P.dashboard) && <Link to="/assistente?aba=insights" className="text-sm font-medium text-positive hover:underline">Mais insights</Link>}
+          </div>
+          <ul className="grid grid-cols-1 gap-2 lg:grid-cols-3">{d.insights.slice(0, 3).map((it, i) => <li key={i}><InsightCard it={it} /></li>)}</ul>
+        </section>
+      )}
+
+      <MissingRecurring items={d.recurring_missing} canOpen={can(P.recurringManage, P.forecastView)} />
 
       {!fresh && (
         <div className="mt-4 grid gap-4 lg:grid-cols-3">

@@ -120,7 +120,8 @@ documents.get('/:id/file', need('documentos.visualizar'), async (req, res) => {
   if (!d.content) throw notFound('Este documento não tem arquivo (foi lido de um código).');
   const safe = String(d.filename || 'documento').replace(/[^\w.\- ]+/g, '_').slice(0, 120);
   res.set({ 'Content-Type': d.mime || 'application/octet-stream', 'Content-Disposition': `${req.query.download === '1' ? 'attachment' : 'inline'}; filename="${safe}"`,
-    'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox" });
+    'X-Content-Type-Options': 'nosniff', // PDF não abre no visualizador do navegador dentro de "sandbox"; imagens e o resto ficam isolados
+    'Content-Security-Policy': d.mime === 'application/pdf' ? "default-src 'none'; object-src 'self'; frame-ancestors 'self'" : "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'self'; sandbox" });
   res.send(d.content);
 });
 documents.post('/:id/discard', need('documentos.gerenciar', 'documentos.enviar'), async (req, res) => {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { UserRound, KeyRound, ShieldCheck, ShieldOff, MonitorSmartphone, Copy, Check, AlertTriangle, LogOut } from 'lucide-react';
 import { api, errorMessage } from '../lib/api';
@@ -205,9 +206,21 @@ export default function Account() {
   const [disable, setDisable] = useState(false);
   const [version, setVersion] = useState(0);
   const mfa = !!user?.mfa_enabled;
+  const [params] = useSearchParams();
+  const required = (params.get('exigir2etapas') === '1' || !!org?.require_mfa) && !mfa;
   return (
     <div className="space-y-4">
       <PageHeader title="Minha conta" icon={UserRound} subtitle={`${user?.name || ''} · ${user?.email || ''}`} />
+      {required && (
+        <div role="alert" className="flex flex-wrap items-start gap-3 rounded-app border border-warn/40 bg-warn-soft px-4 py-3 text-sm text-warn">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <strong className="block">Sua organização exige a verificação em duas etapas.</strong>
+            Ative agora para voltar a usar o CIFREN. Leva menos de 2 minutos com um aplicativo autenticador no celular.
+          </div>
+          <button type="button" className="btn-cta" onClick={() => setSetup(true)}><ShieldCheck className="h-4 w-4" aria-hidden="true" /> Ativar agora</button>
+        </div>
+      )}
       <div className="card flex flex-wrap gap-x-8 gap-y-2 p-5 text-sm">
         <div><span className="text-ink-faint">Organização: </span><strong>{org?.name}</strong></div>
         <div><span className="text-ink-faint">Seu perfil: </span><strong>{role?.name}</strong></div>

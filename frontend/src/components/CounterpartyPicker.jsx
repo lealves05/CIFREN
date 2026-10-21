@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Search, Plus, X, Check } from 'lucide-react';
 import { api, qs, errorMessage } from '../lib/api';
-import { maskDocument } from '../lib/masks';
+import { maskDocument, showMasked } from '../lib/masks';
 import { useAuth } from '../context/AuthContext';
 import { P } from '../lib/permissions';
 import { cx, Spinner } from './ui';
@@ -98,7 +98,7 @@ export default function CounterpartyPicker({ kind, value, onChange, label }) {
                   onMouseDown={(e) => { e.preventDefault(); pick(it); }}
                   className={cx('cursor-pointer rounded-app-sm px-3 py-2 text-sm', i === active ? 'bg-muted' : 'hover:bg-muted')}>
                   <div className="font-medium">{it.name}</div>
-                  {it.document && <div className="text-xs text-ink-faint">{maskDocument(it.document)}</div>}
+                  {it.document && <div className="text-xs text-ink-faint">{showMasked(it.document, maskDocument)}</div>}
                 </li>
               ))}
               {!items.length && <li className="px-3 py-2 text-sm text-ink-faint">{q ? 'Nenhum resultado.' : `Nenhum ${noun} cadastrado ainda.`}</li>}

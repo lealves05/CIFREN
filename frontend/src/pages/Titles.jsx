@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { api, qs } from '../lib/api';
 import { usePaged } from '../lib/useAsync';
 import { P } from '../lib/permissions';
-import { KIND, STATUS_TABS, statusInfo, canSettle, canCancel } from '../lib/titles';
+import { KIND, STATUS_TABS, statusInfo, canSettle, canCancel, titleFlags } from '../lib/titles';
 import { money, date } from '../lib/format';
 import { PageHeader, Tabs, Badge, Loading, ErrorState, EmptyState, LoadMore, InlineError, cx } from '../components/ui';
 import { CompanyFilter } from '../components/Layout';
@@ -121,7 +121,7 @@ export default function Titles({ kind }) {
                       {showCompany && <td className="text-ink-soft">{t.company?.name}</td>}
                       <td className="whitespace-nowrap text-right tabular-nums">{money(t.amount)}</td>
                       <td className={cx('whitespace-nowrap text-right font-medium tabular-nums', t.overdue && 'text-danger')}>{money(t.open_amount)}</td>
-                      <td><Badge tone={st.tone}>{st.label}</Badge></td>
+                      <td><div className="flex flex-wrap gap-1"><Badge tone={st.tone}>{st.label}</Badge>{titleFlags(t).map((fl) => <Badge key={fl.key} tone={fl.tone}><span title={fl.title}>{fl.label}</span></Badge>)}</div></td>
                       <td className="whitespace-nowrap text-right"><div className="flex items-center justify-end gap-1">{settleBtn(t)}<ActionMenu actions={rowActions(t)} label={`Mais ações para ${t.description}`} /></div></td>
                     </tr>
                   );
@@ -157,7 +157,7 @@ export default function Titles({ kind }) {
                     <div>
                       <div className={cx('text-xs', t.overdue ? 'font-semibold text-danger' : 'text-ink-faint')}>Vence {date(t.due_date)}</div>
                       <div className={cx('text-lg font-semibold tabular-nums', t.overdue && 'text-danger')}>{money(t.open_amount > 0 ? t.open_amount : t.amount)}</div>
-                      <Badge tone={st.tone} className="mt-1">{st.label}</Badge>
+                      <div className="mt-1 flex flex-wrap gap-1"><Badge tone={st.tone}>{st.label}</Badge>{titleFlags(t).map((fl) => <Badge key={fl.key} tone={fl.tone}>{fl.label}</Badge>)}</div>
                     </div>
                     {settleBtn(t)}
                   </div>

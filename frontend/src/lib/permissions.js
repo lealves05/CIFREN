@@ -1,4 +1,4 @@
-/** Códigos de permissão (contrato da Fase A). */
+/** Códigos de permissão (contrato da Fase A + Fase B). */
 export const P = {
   titlesView: 'financeiro.titulos.visualizar',
   titlesCreate: 'financeiro.titulos.criar',
@@ -8,6 +8,7 @@ export const P = {
   dashboard: 'financeiro.painel.visualizar',
   registryView: 'cadastros.visualizar',
   registryManage: 'cadastros.gerenciar',
+  registrySensitive: 'cadastros.dados_sensiveis',
   accountsManage: 'contas.gerenciar',
   companiesManage: 'empresas.gerenciar',
   usersManage: 'usuarios.gerenciar',
@@ -15,4 +16,31 @@ export const P = {
   auditView: 'auditoria.visualizar',
   reportsView: 'relatorios.visualizar',
   settingsManage: 'configuracoes.gerenciar',
+
+  // Fase B
+  approve: 'aprovacoes.aprovar',
+  approvalRules: 'aprovacoes.configurar',
+  reconImport: 'conciliacao.importar',
+  reconMatch: 'conciliacao.conciliar',
+  recurringManage: 'recorrencias.gerenciar',
+  forecastView: 'previsao.visualizar',
+  dre: 'relatorios.dre',
+  exportAccounting: 'exportacao.contabil',
+  purchaseRequest: 'compras.solicitar',
+  purchaseApprove: 'compras.aprovar',
+  purchaseManage: 'compras.gerenciar',
+  expenseRequest: 'despesas.solicitar',
+  expenseApprove: 'despesas.aprovar',
+  expensePay: 'despesas.pagar',
+  docsView: 'documentos.visualizar',
+  docsUpload: 'documentos.enviar',
+  docsManage: 'documentos.gerenciar',
+  aiUse: 'ia.usar',
+  aiConfig: 'ia.configurar',
+  integrations: 'integracoes.gerenciar',
+  notifyConfig: 'notificacoes.configurar',
+  security: 'seguranca.configurar',
 };
+
+/** Quem enxerga a fila de aprovações (qualquer tipo). */
+export const APPROVER_PERMS = [P.approve, P.purchaseApprove, P.expenseApprove];

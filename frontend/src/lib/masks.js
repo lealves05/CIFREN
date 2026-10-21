@@ -81,3 +81,8 @@ export function maskPhone(v) {
   if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
   return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
 }
+
+/** Dado mascarado pela API (perfil sem cadastros.dados_sensiveis), ex.: ***.***.789-** */
+export const isMasked = (v, item) => !!item?.masked || (typeof v === 'string' && v.includes('*'));
+/** Mostra como veio se mascarado; senão aplica a máscara de exibição. */
+export const showMasked = (v, mask) => (isMasked(v) ? v : mask(v));

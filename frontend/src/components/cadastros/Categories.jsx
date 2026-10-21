@@ -8,6 +8,16 @@ import Modal from '../Modal';
 import { Input, Select, InlineError, SubmitButton, Loading, ErrorState, EmptyState } from '../ui';
 import { useArchive } from './useArchive';
 
+export const DRE_GROUPS = [
+  { value: 'receita_bruta', label: 'Receita bruta', type: 'receita' },
+  { value: 'deducoes', label: 'Deduções (impostos sobre venda, devoluções)', type: 'despesa' },
+  { value: 'custos', label: 'Custos (mercadoria, matéria-prima, serviço)', type: 'despesa' },
+  { value: 'despesas_operacionais', label: 'Despesas operacionais', type: 'despesa' },
+  { value: 'outras_receitas', label: 'Outras receitas', type: 'receita' },
+  { value: 'despesas_financeiras', label: 'Despesas financeiras (juros, tarifas)', type: 'despesa' },
+];
+const dreLabel = (v) => DRE_GROUPS.find((g) => g.value === v)?.label.split(' (')[0];
+
 function Form({ open, onClose, item, preset, categories, onSaved }) {
   const { toast } = useUI();
   const [f, setF] = useState({});
@@ -17,7 +27,7 @@ function Form({ open, onClose, item, preset, categories, onSaved }) {
   useEffect(() => {
     if (!open) return;
     setError(''); setTouched(false);
-    setF({ name: item?.name || '', type: item?.type || preset?.type || 'despesa', parent_id: item?.parent_id || preset?.parent_id || '' });
+    setF({ name: item?.name || '', type: item?.type || preset?.type || 'despesa', parent_id: item?.parent_id || preset?.parent_id || '', dre_group: item?.dre_group || '' });
   }, [open, item, preset]);
   // só um nível de subcategoria: pais possíveis = categorias principais do mesmo tipo
   const parents = categoryTree(categories, f.type).filter((c) => c.id !== item?.id);
@@ -27,7 +37,7 @@ function Form({ open, onClose, item, preset, categories, onSaved }) {
     if (!f.name.trim()) return;
     setSaving(true);
     try {
-      const body = { name: f.name.trim(), type: f.type, parent_id: f.parent_id || null };
+      const body = { name: f.name.trim(), type: f.type, parent_id: f.parent_id || null, dre_group: f.dre_group || null };
       if (item) await api.put(`/categories/${item.id}`, body); else await api.post('/categories', body);
       toast(item ? 'Categoria atualizada.' : 'Categoria criada.');
       onSaved(); onClose();
@@ -46,6 +56,11 @@ function Form({ open, onClose, item, preset, categories, onSaved }) {
           hint={hasChildren ? 'Esta categoria tem subcategorias, por isso fica como principal.' : 'Deixe “Nenhuma” para criar uma categoria principal.'}>
           <option value="">Nenhuma (categoria principal)</option>
           {parents.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </Select>
+        <Select label="Grupo no DRE" value={f.dre_group} onChange={(e) => setF({ ...f, dre_group: e.target.value })}
+          hint="Em qual linha do DRE (resultado) esta categoria entra. Sem grupo, ela aparece separada com aviso.">
+          <option value="">Sem grupo</option>
+          {[...DRE_GROUPS].sort((a, b) => (a.type === f.type ? -1 : 0) - (b.type === f.type ? -1 : 0)).map((g) => <option key={g.value} value={g.value}>{g.label}</option>)}
         </Select>
       </div>
     </Modal>
@@ -82,6 +97,8 @@ function Row({ c, sub, canManage, onEdit, onArchive, onAdd }) {
     <div className={`flex items-center gap-2 py-2 pr-2 ${sub ? 'pl-8' : 'pl-4'}`}>
       {sub && <CornerDownRight className="h-3.5 w-3.5 text-ink-faint" aria-hidden="true" />}
       <span className={`min-w-0 flex-1 truncate text-sm ${sub ? '' : 'font-medium'}`}>{c.name}</span>
+      {c.dre_group ? <span className="hidden text-xs text-ink-faint sm:inline">DRE: {dreLabel(c.dre_group) || c.dre_group}</span>
+        : <span className="chip bg-warn-soft text-warn" title="Sem grupo no DRE">sem grupo DRE</span>}
       {canManage && (
         <div className="flex">
           {onAdd && <button type="button" className="btn-ghost btn-icon btn-sm" aria-label={`Nova subcategoria em ${c.name}`} title="Nova subcategoria" onClick={onAdd}><Plus className="h-4 w-4" /></button>}
@@ -118,7 +135,7 @@ export default function Categories({ canManage }) {
   return (
     <div>
       <p className="mb-3 text-sm text-ink-faint">Use categorias para saber para onde vai e de onde vem o dinheiro. Subcategorias detalham uma categoria principal.</p>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Group title="Receitas" tree={categoryTree(all, 'receita')} canManage={canManage} {...handlers('receita')} />
         <Group title="Despesas" tree={categoryTree(all, 'despesa')} canManage={canManage} {...handlers('despesa')} />
       </div>

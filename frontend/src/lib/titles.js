@@ -14,7 +14,22 @@ export const STATUS_TABS = [
 ];
 
 export const isOpen = (t) => t && (t.status === 'aberto' || t.status === 'parcial');
-export const canSettle = (t) => isOpen(t) && Number(t.open_amount) > 0;
+export const blockedByApproval = (t) => t && (t.approval_status === 'pendente' || t.approval_status === 'reprovado');
+export const canSettle = (t) => isOpen(t) && Number(t.open_amount) > 0 && !blockedByApproval(t);
+
+export const SOURCE_NAME = { orbi: 'ORBI', torven: 'TORVEN', rusten: 'RUSTEN', apolven: 'APOLVEN', cerebro: 'Cérebro', manual: null, documento: 'Documento', conciliacao: 'Conciliação', compra: 'Compras', reembolso: 'Reembolso', recorrente: 'Recorrente' };
+
+/** Selos extras do título: aprovação, valor estimado (recorrente) e origem. */
+export function titleFlags(t) {
+  if (!t) return [];
+  const out = [];
+  if (t.approval_status === 'pendente') out.push({ key: 'ap', label: 'Aguardando aprovação', tone: 'warn' });
+  if (t.approval_status === 'reprovado') out.push({ key: 'ap', label: 'Reprovado', tone: 'danger' });
+  if (t.estimated) out.push({ key: 'est', label: 'Valor estimado', tone: 'warn', title: 'Valor estimado — aguardando a conta chegar' });
+  const src = t.source && t.source !== 'manual' ? (SOURCE_NAME[t.source] !== undefined ? SOURCE_NAME[t.source] : String(t.source).toUpperCase()) : null;
+  if (src) out.push({ key: 'src', label: `Veio do ${src}`, tone: 'neutral' });
+  return out;
+}
 export const canCancel = (t) => t && t.status === 'aberto' && !Number(t.paid_amount);
 
 /** Rótulo e tom do selo de situação. */

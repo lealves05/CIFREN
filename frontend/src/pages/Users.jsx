@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Users as UsersIcon, UserCog, ShieldCheck } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
@@ -14,7 +15,9 @@ export default function Users() {
     can(P.usersManage) && { value: 'usuarios', label: 'Usuários', icon: UserCog },
     can(P.rolesManage) && { value: 'perfis', label: 'Perfis', icon: ShieldCheck },
   ].filter(Boolean);
-  const [tab, setTab] = useState(tabs[0]?.value);
+  const [params] = useSearchParams();
+  const asked = params.get('aba');
+  const [tab, setTab] = useState(tabs.some((t) => t.value === asked) ? asked : tabs[0]?.value);
   // a lista de perfis serve às duas abas (escolher o perfil de um usuário e editar perfis)
   const roles = useAsync(() => api.get('/roles').catch((e) => (can(P.rolesManage) ? Promise.reject(e) : null)), []);
   return (

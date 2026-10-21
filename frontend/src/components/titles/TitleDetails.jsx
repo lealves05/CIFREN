@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { FileText } from 'lucide-react';
 import { Undo2, CheckCircle2, Pencil, Ban } from 'lucide-react';
 import Drawer from '../Drawer';
 import { Badge, ErrorState, Loading, Spinner } from '../ui';
 import { api, errorMessage } from '../../lib/api';
-import { KIND, statusInfo, canSettle, canCancel } from '../../lib/titles';
+import { KIND, statusInfo, canSettle, canCancel, titleFlags } from '../../lib/titles';
+import { docKindLabel } from '../../lib/documents';
 import { money, date, dateTime, methodLabel } from '../../lib/format';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
@@ -66,9 +69,22 @@ export default function TitleDetails({ open, onClose, titleId, kind, onSettle, o
       {error ? <ErrorState error={error} onRetry={load} /> : !t ? <Loading /> : (
         <div className="space-y-6">
           <div className="flex items-center justify-between gap-3">
-            <Badge tone={st.tone}>{st.label}</Badge>
+            <div className="flex flex-wrap gap-1"><Badge tone={st.tone}>{st.label}</Badge>{titleFlags(t).map((fl) => <Badge key={fl.key} tone={fl.tone}>{fl.label}</Badge>)}</div>
             {t.installments > 1 && <span className="text-xs text-ink-faint">Parcela {t.installment} de {t.installments}</span>}
           </div>
+          {t.approval_status === 'pendente' && (
+            <p role="note" className="rounded-app-sm border border-warn/40 bg-warn-soft px-3 py-2 text-sm text-warn">
+              Esta conta passou da alçada e espera aprovação. Só pode ser paga depois de aprovada. <Link to="/aprovacoes" className="font-semibold underline">Ver aprovações</Link>
+            </p>
+          )}
+          {t.approval_status === 'reprovado' && (
+            <p role="note" className="rounded-app-sm border border-danger/30 bg-danger-soft px-3 py-2 text-sm text-danger">Esta conta foi reprovada e não pode ser paga. Se não for mais necessária, cancele.</p>
+          )}
+          {t.estimated && (
+            <p role="note" className="rounded-app-sm border border-warn/40 bg-warn-soft px-3 py-2 text-sm text-warn">
+              Valor estimado — aguardando a conta chegar{t.recurring?.name && ` (${t.recurring.name})`}. Quando chegar, corrija o valor em Editar ou em <Link to="/recorrentes" className="font-semibold underline">Recorrentes</Link>.
+            </p>
+          )}
           <div className="grid grid-cols-3 gap-2 text-center">
             <div className="rounded-app-sm bg-muted p-3"><div className="text-xs text-ink-faint">Valor</div><div className="font-semibold tabular-nums">{money(t.amount)}</div></div>
             <div className="rounded-app-sm bg-muted p-3"><div className="text-xs text-ink-faint">{t.kind === 'receber' ? 'Recebido' : 'Pago'}</div><div className="font-semibold tabular-nums text-positive">{money(t.paid_amount)}</div></div>
@@ -85,6 +101,21 @@ export default function TitleDetails({ open, onClose, titleId, kind, onSettle, o
             <Row label="Competência">{t.competence_date && date(t.competence_date).slice(3)}</Row>
             {t.notes && <Row label="Observações"><span className="whitespace-pre-line font-normal">{t.notes}</span></Row>}
           </dl>
+
+          {(t.documents || []).length > 0 && (
+            <section aria-labelledby="docs-t">
+              <h3 id="docs-t" className="mb-2 text-sm font-semibold">Documentos</h3>
+              <ul className="space-y-1.5">
+                {t.documents.map((d) => (
+                  <li key={d.id}>
+                    <Link to={`/documentos/${d.id}`} onClick={onClose} className="flex items-center gap-2 rounded-app-sm border border-line px-3 py-2 text-sm hover:bg-muted">
+                      <FileText className="h-4 w-4 text-accent" aria-hidden="true" /><span className="min-w-0 flex-1 truncate">{d.filename || docKindLabel(d.kind)}</span><span className="text-xs text-ink-faint">{docKindLabel(d.kind)}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           <section aria-labelledby="baixas-t">
             <h3 id="baixas-t" className="mb-2 text-sm font-semibold">Baixas ({t.kind === 'receber' ? 'recebimentos' : 'pagamentos'})</h3>
