@@ -17,7 +17,7 @@ let hubDownUntil = 0;
 
 /** Módulos que a central liga/desliga por plano. `routes` = prefixos da API interna. */
 export const FEATURES = {
-  financeiro: { label: 'Contas a pagar e a receber, caixa e painel', routes: ['/titles', '/settlements', '/dashboard'] },
+  financeiro: { label: 'Contas a pagar e a receber, caixa e painel', routes: ['/titles', '/settlements', '/dashboard', '/approvals', '/approval-rules', '/insights'] },
   conciliacao_bancaria: { label: 'Conciliação bancária (extratos OFX/CSV)', routes: ['/reconciliation'] },
   recorrencias: { label: 'Compromissos recorrentes e previsão (estimado × real)', routes: ['/recurring'] },
   cobranca: { label: 'Cobrança por boleto e Pix', routes: ['/charges'] },
@@ -28,7 +28,10 @@ export const FEATURES = {
   orcamento: { label: 'Orçamento (previsto × realizado)', routes: ['/budgets'] },
   relatorios: { label: 'Relatórios e exportação', routes: ['/reports', '/export'] },
   whatsapp: { label: 'Agente do WhatsApp', routes: ['/whatsapp'] },
-  integracoes_lorler: { label: 'Integração com ORBI, TORVEN, RUSTEN e APOLVEN', routes: ['/integrations/lorler'] },
+  integracoes_lorler: { label: 'Integração com ORBI, TORVEN, RUSTEN e APOLVEN', routes: ['/integrations'] },
+  compras: { label: 'Gestão de compras', routes: ['/purchases'] },
+  despesas: { label: 'Despesas e reembolsos', routes: ['/expenses'] },
+  agentes_ia: { label: 'Agentes de IA (pergunte ao financeiro, insights com IA)', routes: ['/ai'] },
 };
 const BLOCKED_ALLOWED = ['/billing'];
 

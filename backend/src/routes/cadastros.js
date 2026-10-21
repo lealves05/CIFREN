@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { orgTx } from '../db.js';
 import { HttpError, parse, notFound, uuidParam, isUuid, likeEsc, today } from '../util.js';
-import { need, assertCompany } from '../auth.js';
+import { need, can, assertCompany } from '../auth.js';
 import { audit } from '../audit.js';
 
 const actor = (req) => ({ id: req.user.id, name: req.user.name });
@@ -14,11 +14,11 @@ const money = z.coerce.number().finite().refine((v) => Math.abs(v) < 1e13, 'valo
 /**
  * CRUD simples com arquivamento (DELETE = active=false). `fields` = colunas graváveis; `entity` = nome na auditoria.
  */
-function simpleCrud({ table, entity, label, schema, fields, list, cols }) {
+function simpleCrud({ table, entity, label, schema, fields, list, cols, mask = (_req, x) => x }) {
   const r = Router();
   r.get('/', need('cadastros.visualizar', 'cadastros.gerenciar', 'financeiro.titulos.visualizar'), async (req, res) => {
     const items = await orgTx(req.orgId, (db) => list(db, req.query));
-    res.json({ items });
+    res.json({ items: items.map((x) => mask(req, x)) });
   });
   r.post('/', need('cadastros.gerenciar'), async (req, res) => {
     const d = parse(schema, req.body);
@@ -29,7 +29,7 @@ function simpleCrud({ table, entity, label, schema, fields, list, cols }) {
       await audit(db, { actor: actor(req), req, action: `${entity}.criado`, entity, entityId: x.id, summary: `${label} ${x.name}` });
       return x;
     });
-    res.status(201).json(row);
+    res.status(201).json(mask(req, row));
   });
   r.put('/:id', need('cadastros.gerenciar'), async (req, res) => {
     const id = uuidParam(req.params.id);
@@ -42,7 +42,7 @@ function simpleCrud({ table, entity, label, schema, fields, list, cols }) {
       await audit(db, { actor: actor(req), req, action: `${entity}.alterado`, entity, entityId: id, summary: `${label} ${x.name}`, data: d });
       return x;
     });
-    res.json(row);
+    res.json(mask(req, row));
   });
   r.delete('/:id', need('cadastros.gerenciar'), async (req, res) => {
     const id = uuidParam(req.params.id);
@@ -59,8 +59,20 @@ function simpleCrud({ table, entity, label, schema, fields, list, cols }) {
 const activeFilter = (v) => (v === 'false' ? 'not active' : v === 'all' || v === 'todos' ? 'true' : 'active');
 
 // ---------------- clientes e fornecedores ----------------
+/** Sem a permissão cadastros.dados_sensiveis, CPF/CNPJ, e-mail e telefone vêm mascarados (LGPD: mínimo necessário). */
+export function maskDoc(v) {
+  const s = String(v || ''); if (!s) return s;
+  let i = 0; const digits = s.replace(/\D/g, '').length;
+  // mostra só os dígitos do meio (posições 7–9 de um CPF; 9–12 de um CNPJ)
+  const [from, to] = digits > 11 ? [8, 12] : [6, 9];
+  return s.replace(/\d/g, (d) => { i++; return i > from && i <= to ? d : '*'; });
+}
+export const maskEmail = (v) => { const m = String(v || '').match(/^(.)[^@]*(@.*)$/); return m ? `${m[1]}***${m[2]}` : v; };
+export const maskPhone = (v) => { const s = String(v || ''); return s ? s.replace(/\d(?=(?:\D*\d){4})/g, '*') : s; };
+export const maskCounterparty = (req, x) => (can(req, 'cadastros.dados_sensiveis') || !x ? x
+  : { ...x, document: x.document ? maskDoc(x.document) : x.document, email: x.email ? maskEmail(x.email) : x.email, phone: x.phone ? maskPhone(x.phone) : x.phone, masked: true });
 export const counterparties = simpleCrud({
-  table: 'counterparties', entity: 'counterparty', label: 'Cadastro',
+  table: 'counterparties', entity: 'counterparty', label: 'Cadastro', mask: maskCounterparty,
   cols: 'id, kind, name, document, email, phone, notes, active',
   fields: ['kind', 'name', 'document', 'email', 'phone', 'notes'],
   schema: z.object({
@@ -78,12 +90,14 @@ export const counterparties = simpleCrud({
 });
 
 // ---------------- categorias ----------------
+const DRE = ['receita_bruta', 'deducoes', 'custos', 'despesas_operacionais', 'outras_receitas', 'despesas_financeiras'];
 const categorySchema = z.object({ name: z.string().trim().min(1, 'informe o nome').max(80), type: z.enum(['receita', 'despesa']),
+  dre_group: z.enum(DRE).optional().nullable(),
   parent_id: z.string().optional().nullable().refine((v) => !v || isUuid(v), 'categoria-mãe inválida').transform((v) => v || null) });
 export const categories = simpleCrud({
   table: 'categories', entity: 'category', label: 'Categoria',
-  cols: 'id, name, type, parent_id, active', fields: ['name', 'type', 'parent_id'], schema: categorySchema,
-  list: (db, qs) => db.all(`select id, name, type, parent_id, active from categories where ${activeFilter(qs.active)} order by type, lower(name)`),
+  cols: 'id, name, type, parent_id, dre_group, active', fields: ['name', 'type', 'parent_id', 'dre_group'], schema: categorySchema,
+  list: (db, qs) => db.all(`select id, name, type, parent_id, dre_group, active from categories where ${activeFilter(qs.active)} order by type, lower(name)`),
 });
 // a categoria-mãe precisa existir na organização e ter o mesmo tipo (a RLS já esconde as de outras organizações)
 const checkParent = async (req, _res, next) => {

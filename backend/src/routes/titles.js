@@ -8,6 +8,9 @@ import { HttpError, parse, notFound, uuidParam, isUuid, likeEsc, today, splitAmo
 import { need, assertCompany, companyAllowed } from '../auth.js';
 import { audit } from '../audit.js';
 import { BALANCE_SQL } from './cadastros.js';
+import { needsApproval, requestApproval, assertApprovedForPayment } from '../lib/approvals.js';
+import { onTitleSettled } from '../lib/recurring.js';
+import { insightsFor } from '../lib/insights.js';
 
 const actor = (req) => ({ id: req.user.id, name: req.user.name });
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'data inválida (use AAAA-MM-DD)')
@@ -20,9 +23,11 @@ const positive = z.coerce.number().finite().positive('o valor precisa ser maior 
 const nonNeg = z.coerce.number().finite().min(0).refine((v) => v < 1e13, 'valor fora do limite').transform((v) => Math.round(v * 100) / 100);
 
 // ---------------- consulta comum ----------------
-const PAID = `coalesce((select sum(s.amount) from settlements s where s.title_id=t.id and s.reversed_at is null), 0)`;
+export const PAID = `coalesce((select sum(s.amount) from settlements s where s.title_id=t.id and s.reversed_at is null), 0)`;
 const SELECT = `select t.id, t.kind, t.description, t.document_number, t.issue_date, t.competence_date, t.due_date, t.amount, t.status,
     t.installment, t.installments, t.group_id, t.notes, t.cancel_reason, t.version, t.created_at,
+    t.approval_status, t.estimated, t.source,
+    (select json_build_object('id', rc.id, 'name', rc.name) from recurring_occurrences ro join recurring_commitments rc on rc.id=ro.commitment_id where ro.id=t.recurring_occurrence_id) as recurring,
     ${PAID} as paid_amount,
     case when cp.id is null then null else json_build_object('id', cp.id, 'name', cp.name) end as counterparty,
     case when c.id is null then null else json_build_object('id', c.id, 'name', c.name) end as category,
@@ -49,7 +54,7 @@ async function loadTitle(db, req, id, lock = false) {
 }
 
 /** Recalcula o status pelo total baixado (não estornado). */
-async function refreshStatus(db, id) {
+export async function refreshStatus(db, id) {
   const r = await db.one(`update titles t set status = case
         when t.status = 'cancelado' then 'cancelado'
         when ${PAID} >= t.amount then 'pago'
@@ -149,6 +154,12 @@ titles.post('/', need('financeiro.titulos.criar'), async (req, res) => {
     await audit(db, { actor: actor(req), req, action: 'titulo.criado', entity: 'title', entityId: out[0],
       summary: `${d.kind === 'pagar' ? 'A pagar' : 'A receber'}: ${d.description} — R$ ${d.amount.toFixed(2)}${n > 1 ? ` em ${n} parcelas` : ''}`,
       data: { kind: d.kind, amount: d.amount, due_date: d.due_date, installments: n, ids: out } });
+    // alçada: conta a pagar acima do valor definido só pode ser paga depois de aprovada por outra pessoa (uma aprovação para todas as parcelas)
+    if (d.kind === 'pagar' && (await needsApproval(db, 'title', d.company_id, d.amount))) {
+      await db.query("update titles set approval_status='pendente' where id = any($1::uuid[])", [out]);
+      await requestApproval(db, req, { entity: 'title', entityId: out[0], companyId: d.company_id, amount: d.amount,
+        summary: `A pagar: ${d.description}${n > 1 ? ` (${n} parcelas)` : ''}` });
+    }
     return out;
   });
   res.status(201).json({ ids });
@@ -164,7 +175,8 @@ titles.get('/:id', need('financeiro.titulos.visualizar'), async (req, res) => {
         s.method, s.notes, s.reversed_at, s.reverse_reason, s.created_at
       from settlements s join bank_accounts a on a.id=s.account_id where s.title_id=$1 order by s.created_at`, [id]);
     const raw = await db.one('select counterparty_id, category_id, cost_center_id, company_id from titles where id=$1', [id]);
-    return { ...shape(t, day), ...raw, settlements };
+    const documents = await db.all(`select d.id, d.filename, d.kind from document_links l join documents d on d.id=l.document_id where l.entity='title' and l.entity_id=$1`, [id]);
+    return { ...shape(t, day), ...raw, settlements, documents };
   });
   res.json(out);
 });
@@ -195,6 +207,12 @@ titles.put('/:id', need('financeiro.titulos.editar'), async (req, res) => {
       .filter((k) => Object.prototype.hasOwnProperty.call(body, k) && d[k] !== undefined);
     if (!keys.length) throw new HttpError(400, 'Nada para alterar.');
     await db.query(`update titles set ${keys.map((k, i) => `${k}=$${i + 2}`).join(',')}, updated_at=now(), version=version+1 where id=$1`, [id, ...keys.map((k) => d[k])]);
+    // aumentou o valor de uma conta a pagar já aprovada (ou passou da alçada): volta para aprovação
+    if (t.kind === 'pagar' && keys.includes('amount') && d.amount > Number(t.amount) && (await needsApproval(db, 'title', t.company_id, d.amount))) {
+      await db.query("update titles set approval_status='pendente' where id=$1", [id]);
+      await db.query("update approvals set status='cancelado' where entity='title' and entity_id=$1 and status='pendente'", [id]);
+      await requestApproval(db, req, { entity: 'title', entityId: id, companyId: t.company_id, amount: d.amount, summary: `A pagar (valor alterado): ${d.description || t.description}` });
+    }
     const before = Object.fromEntries(keys.map((k) => [k, t[k] instanceof Date ? t[k].toISOString() : t[k]]));
     await audit(db, { actor: actor(req), req, action: 'titulo.alterado', entity: 'title', entityId: id, summary: t.description,
       data: { antes: before, depois: Object.fromEntries(keys.map((k) => [k, d[k]])) } });
@@ -215,8 +233,17 @@ titles.post('/:id/settle', need('financeiro.titulos.baixar'), async (req, res) =
   const d = parse(settleSchema, req.body);
   const out = await orgTx(req.orgId, async (db) => {
     const t = await loadTitle(db, req, id, true);
+    return settleTitle(db, req, t, d);
+  });
+  res.json(out);
+});
+
+/** Baixa (usada também pela conciliação e pelos reembolsos). origin: manual | conciliacao | reembolso | integracao. */
+export async function settleTitle(db, req, t, d, origin = 'manual') {
+    const id = t.id;
     if (t.status === 'cancelado') throw new HttpError(409, 'Título cancelado não pode receber baixa.');
     if (t.status === 'pago') throw new HttpError(409, 'Este título já está quitado.');
+    assertApprovedForPayment(t);
     const acc = await db.one('select company_id, active, opening_date, name from bank_accounts where id=$1', [d.account_id]);
     if (!acc || !acc.active) throw new HttpError(400, 'Conta não encontrada ou arquivada.');
     if (acc.company_id !== t.company_id) throw new HttpError(400, 'Use uma conta da mesma empresa do título.');
@@ -226,16 +253,15 @@ titles.post('/:id/settle', need('financeiro.titulos.baixar'), async (req, res) =
     const open = toCents(t.amount) - toCents(paid);
     if (toCents(d.amount) > open) throw new HttpError(400, `O valor baixado passa do saldo em aberto (R$ ${fromCents(open).toFixed(2)}).`);
     if (toCents(d.discount) > toCents(d.amount) + toCents(d.interest) + toCents(d.fine)) throw new HttpError(400, 'O desconto não pode ser maior que o valor pago.');
-    const s = await db.one(`insert into settlements (org_id, title_id, account_id, paid_at, amount, interest, fine, discount, method, notes, created_by)
-      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`,
-    [req.orgId, id, d.account_id, d.paid_at, d.amount, d.interest, d.fine, d.discount, d.method, d.notes, req.user.id]);
+    const s = await db.one(`insert into settlements (org_id, title_id, account_id, paid_at, amount, interest, fine, discount, method, notes, created_by, origin)
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning id`,
+    [db.orgId, id, d.account_id, d.paid_at, d.amount, d.interest || 0, d.fine || 0, d.discount || 0, d.method || 'outro', d.notes || null, req?.user?.id || null, origin]);
     const status = await refreshStatus(db, id);
-    await audit(db, { actor: actor(req), req, action: 'titulo.baixado', entity: 'title', entityId: id,
-      summary: `${t.description}: R$ ${d.amount.toFixed(2)} em ${acc.name} (${status})`, data: { settlement_id: s.id, ...d } });
+    if (status === 'pago') await onTitleSettled(db, id);
+    await audit(db, { actor: req?.user ? actor(req) : { id: null, name: 'Integração' }, req, action: 'titulo.baixado', entity: 'title', entityId: id,
+      summary: `${t.description}: R$ ${Number(d.amount).toFixed(2)} em ${acc.name} (${status})${origin !== 'manual' ? ` — ${origin}` : ''}`, data: { settlement_id: s.id, ...d, origin } });
     return { ok: true, status, settlement_id: s.id };
-  });
-  res.json(out);
-});
+}
 
 titles.post('/:id/cancel', need('financeiro.titulos.cancelar'), async (req, res) => {
   const id = uuidParam(req.params.id);
@@ -294,8 +320,16 @@ dashboard.get('/', need('financeiro.painel.visualizar'), async (req, res) => {
        group by 1 order by 2 desc limit 8`, [scope, day]);
     const upcoming = await db.all(`${SELECT} where t.status in ('aberto','parcial') and ($1::uuid[] is null or t.company_id = any($1::uuid[]))
        order by t.due_date, t.id limit 8`, [scope]);
-    return { accounts, open, month, byCat, upcoming };
+    const pending = await db.one(`select
+        (select count(*)::int from approvals where status='pendente') as approvals,
+        (select count(*)::int from statement_lines l join bank_accounts a on a.id=l.account_id where l.status='pendente' and ($1::uuid[] is null or a.company_id = any($1::uuid[]))) as recon,
+        (select count(*)::int from documents where status in ('recebido','processado','aguardando_ia') and ($1::uuid[] is null or company_id = any($1::uuid[]))) as docs`, [scope]);
+    const missing = await db.all(`select c.name, o.due_date, o.estimated_amount as estimated from recurring_occurrences o join recurring_commitments c on c.id=o.commitment_id
+        join titles t on t.id=o.title_id where o.status='lancada' and t.estimated and t.status='aberto' and o.due_date <= $2::date + 7
+          and ($1::uuid[] is null or c.company_id = any($1::uuid[])) order by o.due_date limit 8`, [scope, day]);
+    return { accounts, open, month, byCat, upcoming, pending, missing };
   });
+  const ins = await insightsFor(req.orgId, scope).catch(() => []);
   const cashCents = out.accounts.reduce((a, x) => a + toCents(x.balance), 0);
   const next7 = addInterval(day, 'semanal', 1);
   const bucket = (kind) => {
@@ -320,5 +354,8 @@ dashboard.get('/', need('financeiro.painel.visualizar'), async (req, res) => {
     payables: bucket('pagar'), receivables: bucket('receber'), flow,
     expenses_by_category: out.byCat.map((r) => ({ name: r.name, amount: Number(r.amount) })),
     upcoming: out.upcoming.map((r) => shape(r, day)),
+    pending_approvals: out.pending.approvals, reconciliation_pending: out.pending.recon, documents_pending: out.pending.docs,
+    recurring_missing: out.missing.map((m) => ({ ...m, estimated: Number(m.estimated) })),
+    insights: ins.slice(0, 3),
   });
 });
