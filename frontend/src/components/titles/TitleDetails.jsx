@@ -22,7 +22,7 @@ function Row({ label, children }) {
 }
 
 /** Gaveta com os detalhes da conta, baixas feitas e estorno. */
-export default function TitleDetails({ open, onClose, titleId, kind, onSettle, onEdit, onCancel, onChanged, version }) {
+export default function TitleDetails({ open, onClose, titleId, kind, onSettle, onEdit, onCancel, onEditGroup, onChanged, version }) {
   const { can } = useAuth();
   const { askReason, toast } = useUI();
   const [t, setT] = useState(null);
@@ -70,7 +70,11 @@ export default function TitleDetails({ open, onClose, titleId, kind, onSettle, o
         <div className="space-y-6">
           <div className="flex items-center justify-between gap-3">
             <div className="flex flex-wrap gap-1"><Badge tone={st.tone}>{st.label}</Badge>{titleFlags(t).map((fl) => <Badge key={fl.key} tone={fl.tone}>{fl.label}</Badge>)}</div>
-            {t.installments > 1 && <span className="text-xs text-ink-faint">Parcela {t.installment} de {t.installments}</span>}
+            {t.installments > 1 && (
+              <span className="flex items-center gap-2 text-xs text-ink-faint">Parcela {t.installment} de {t.installments}
+                {t.group_id && can(P.titlesEdit) && onEditGroup && <button type="button" className="btn-outline btn-sm" onClick={() => onEditGroup(t)}>Lançamento original</button>}
+              </span>
+            )}
           </div>
           {t.approval_status === 'pendente' && (
             <p role="note" className="rounded-app-sm border border-warn/40 bg-warn-soft px-3 py-2 text-sm text-warn">

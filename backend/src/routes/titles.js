@@ -42,7 +42,7 @@ const SELECT = `select t.id, t.kind, t.description, t.document_number, t.issue_d
 function shape(row, day) {
   const paid = Number(row.paid_amount) || 0;
   const open = row.status === 'cancelado' ? 0 : fromCents(Math.max(0, toCents(row.amount) - toCents(paid)));
-  const { group_id: _g, version, created_at: _c, ...rest } = row;
+  const { version, created_at: _c, ...rest } = row;
   return { ...rest, version, paid_amount: paid, open_amount: open, overdue: open > 0 && row.due_date < day };
 }
 
@@ -358,4 +358,154 @@ dashboard.get('/', need('financeiro.painel.visualizar'), async (req, res) => {
     recurring_missing: out.missing.map((m) => ({ ...m, estimated: Number(m.estimated) })),
     insights: ins.slice(0, 3),
   });
+});
+
+
+// ---------------- lançamento original (todas as parcelas de uma repetição) ----------------
+// Edita de uma vez as parcelas ainda em aberto e sem baixa (as pagas ficam como estão) ou exclui o lançamento
+// errado (cancela todas as parcelas sem baixa; o histórico fica na auditoria e na aba Cancelados).
+export const titleGroups = Router();
+const baseDesc = (s) => String(s || '').replace(/\s*\(\d+\/\d+\)\s*$/, '');
+const INTERVALS = ['mensal', 'bimestral', 'trimestral', 'semestral', 'anual', 'semanal', 'quinzenal'];
+const stepOf = (iv) => ({ bimestral: ['mensal', 2], trimestral: ['mensal', 3], semestral: ['mensal', 6] }[iv] || [iv, 1]);
+
+async function loadGroup(db, req, gid, lock = false) {
+  const rows = await db.all(`select t.*, ${PAID} as paid_amount,
+      exists(select 1 from settlements s where s.title_id=t.id and s.reversed_at is null) as has_payment
+    from titles t where t.group_id=$1 order by t.installment ${lock ? 'for update of t' : ''}`, [gid]);
+  if (!rows.length || !companyAllowed(req, rows[0].company_id)) throw notFound('Lançamento não encontrado.');
+  return rows;
+}
+const editable = (t) => t.status === 'aberto' && !t.has_payment;
+function guessInterval(rows) {
+  if (rows.length < 2) return 'mensal';
+  const [a, b] = [rows[0].due_date, rows[1].due_date];
+  for (const iv of INTERVALS) { const [base, k] = stepOf(iv); if (addInterval(a, base, k) === b) return iv; }
+  return 'mensal';
+}
+async function groupShape(db, rows) {
+  const f = rows[0];
+  const ref = await db.one(`select (select json_build_object('id', id, 'name', name) from counterparties where id=$1) as counterparty,
+      (select json_build_object('id', id, 'name', name) from categories where id=$2) as category,
+      (select json_build_object('id', id, 'name', name) from cost_centers where id=$3) as cost_center,
+      (select json_build_object('id', id, 'name', name) from companies where id=$4) as company`, [f.counterparty_id, f.category_id, f.cost_center_id, f.company_id]);
+  const live = rows.filter((t) => t.status !== 'cancelado');
+  return { group_id: f.group_id, kind: f.kind, description: baseDesc(f.description), ...ref, document_number: f.document_number, notes: f.notes,
+    interval: guessInterval(live.length >= 2 ? live : rows), installments_total: live.length,
+    total: fromCents(live.reduce((a, t) => a + toCents(t.amount), 0)), paid_total: fromCents(live.reduce((a, t) => a + toCents(t.paid_amount), 0)),
+    editable_count: rows.filter(editable).length, locked_count: live.filter((t) => !editable(t)).length,
+    items: rows.map((t) => ({ id: t.id, installment: t.installment, installments: t.installments, description: t.description, due_date: t.due_date, amount: Number(t.amount),
+      paid_amount: Number(t.paid_amount), status: t.status, approval_status: t.approval_status, editable: editable(t) })) };
+}
+
+titleGroups.get('/:gid', need('financeiro.titulos.visualizar'), async (req, res) => {
+  const gid = uuidParam(req.params.gid);
+  res.json(await orgTx(req.orgId, async (db) => groupShape(db, await loadGroup(db, req, gid))));
+});
+
+const groupSchema = z.object({
+  description: z.string().trim().min(1).max(180).optional(),
+  counterparty_id: optUuid('cliente/fornecedor'), category_id: optUuid('categoria'), cost_center_id: optUuid('centro de custo'),
+  document_number: optText(60), notes: optText(2000),
+  amount: positive.optional(),                 // novo valor de CADA parcela em aberto
+  first_due_date: dateStr.optional(),          // novo vencimento da primeira parcela em aberto; as seguintes seguem o intervalo
+  interval: z.enum(INTERVALS).optional(),
+  installments_total: z.coerce.number().int().min(1).max(360).optional(), // aumentar cria parcelas; diminuir exclui as últimas em aberto
+});
+titleGroups.put('/:gid', need('financeiro.titulos.editar'), async (req, res) => {
+  const gid = uuidParam(req.params.gid);
+  const body = req.body || {};
+  const d = parse(groupSchema, body);
+  const has = (k) => Object.prototype.hasOwnProperty.call(body, k) && d[k] !== undefined;
+  const out = await orgTx(req.orgId, async (db) => {
+    let rows = await loadGroup(db, req, gid, true);
+    const f = rows[0];
+    await checkRefs(db, d, f.kind);
+    const changes = [];
+    // 1) quantidade de parcelas
+    const live = rows.filter((t) => t.status !== 'cancelado');
+    if (has('installments_total') && d.installments_total !== live.length) {
+      if (d.installments_total < live.length) {
+        const drop = live.slice(d.installments_total);
+        if (drop.some((t) => !editable(t))) throw new HttpError(409, 'Só dá para tirar parcelas em aberto e sem baixa. Estorne a baixa da parcela antes.');
+        for (const t of drop) await db.query("update titles set status='cancelado', cancel_reason='Parcela retirada do lançamento', cancelled_at=now(), updated_at=now(), version=version+1 where id=$1", [t.id]);
+        changes.push(`${drop.length} parcela(s) retirada(s)`);
+      } else {
+        const last = live[live.length - 1] || f; const iv = d.interval || guessInterval(live);
+        const [base, k] = stepOf(iv);
+        for (let i = 1; i <= d.installments_total - live.length; i++) {
+          await db.query(`insert into titles (org_id, company_id, kind, description, counterparty_id, category_id, cost_center_id, document_number, issue_date, competence_date,
+              due_date, amount, group_id, installment, installments, notes, approval_status, source, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+          [req.orgId, f.company_id, f.kind, f.description, f.counterparty_id, f.category_id, f.cost_center_id, f.document_number, f.issue_date,
+            addInterval(last.competence_date || last.due_date, base, k * i), addInterval(last.due_date, base, k * i), last.amount, gid,
+            last.installment + i, d.installments_total, f.notes, f.approval_status === 'aprovado' ? 'aprovado' : f.approval_status, f.source, req.user.id]);
+        }
+        changes.push(`${d.installments_total - live.length} parcela(s) incluída(s)`);
+      }
+      rows = await loadGroup(db, req, gid, true);
+    }
+    // renumera as parcelas ativas (1/n … n/n) e aplica a descrição
+    const act = rows.filter((t) => t.status !== 'cancelado'); const n = act.length;
+    const desc = has('description') ? d.description : baseDesc(f.description);
+    for (let i = 0; i < act.length; i++) {
+      const label = n > 1 ? `${desc} (${i + 1}/${n})` : desc;
+      if (act[i].description !== label || act[i].installment !== i + 1 || act[i].installments !== n) {
+        await db.query('update titles set description=$2, installment=$3, installments=$4, updated_at=now(), version=version+1 where id=$1', [act[i].id, label.slice(0, 200), i + 1, n]);
+      }
+    }
+    if (has('description') && d.description !== baseDesc(f.description)) changes.push('descrição');
+    // 2) campos de cadastro: em todas as parcelas ativas (não mexe em valor nem em baixa)
+    const keys = ['counterparty_id', 'category_id', 'cost_center_id', 'document_number', 'notes'].filter(has);
+    if (keys.length) {
+      await db.query(`update titles set ${keys.map((k, i) => `${k}=$${i + 2}`).join(',')}, updated_at=now(), version=version+1 where group_id=$1 and status <> 'cancelado'`, [gid, ...keys.map((k) => d[k])]);
+      changes.push(keys.map((k) => ({ counterparty_id: 'fornecedor/cliente', category_id: 'categoria', cost_center_id: 'centro de custo', document_number: 'documento', notes: 'observações' }[k])).join(', '));
+    }
+    // 3) valor e vencimentos: só parcelas em aberto e sem baixa
+    const open = act.filter(editable);
+    if ((has('amount') || has('first_due_date')) && !open.length) throw new HttpError(409, 'Todas as parcelas já têm baixa: valor e vencimento não mudam mais.');
+    let raised = 0;
+    if (has('amount')) {
+      for (const t of open) if (d.amount !== Number(t.amount)) { if (d.amount > Number(t.amount)) raised += 1; await db.query('update titles set amount=$2, updated_at=now(), version=version+1 where id=$1', [t.id, d.amount]); }
+      changes.push(`valor de ${open.length} parcela(s) em aberto: R$ ${d.amount.toFixed(2)}`);
+    }
+    if (has('first_due_date')) {
+      const [base, k] = stepOf(d.interval || guessInterval(act));
+      for (let i = 0; i < open.length; i++) {
+        const due = addInterval(d.first_due_date, base, k * i);
+        await db.query("update titles set due_date=$2, competence_date=case when competence_date is null then null else date_trunc('month', $2::date)::date end, updated_at=now(), version=version+1 where id=$1", [open[i].id, due]);
+      }
+      changes.push(`vencimentos a partir de ${d.first_due_date.split('-').reverse().join('/')}`);
+    }
+    if (!changes.length) throw new HttpError(400, 'Nada para alterar.');
+    // valor maior numa conta a pagar: volta para aprovação, se a alçada pedir
+    if (f.kind === 'pagar' && raised) {
+      const totalOpen = d.amount * open.length;
+      if (await needsApproval(db, 'title', f.company_id, totalOpen)) {
+        await db.query("update titles set approval_status='pendente' where id = any($1::uuid[])", [open.map((t) => t.id)]);
+        await db.query("update approvals set status='cancelado' where entity='title' and entity_id = any($1::uuid[]) and status='pendente'", [open.map((t) => t.id)]);
+        await requestApproval(db, req, { entity: 'title', entityId: open[0].id, companyId: f.company_id, amount: totalOpen, summary: `A pagar (lançamento alterado): ${desc}` });
+      }
+    }
+    await audit(db, { actor: actor(req), req, action: 'lancamento.alterado', entity: 'title_group', entityId: gid, summary: `${desc}: ${changes.join('; ')}`,
+      data: { antes: { description: baseDesc(f.description), parcelas: live.length, valores: live.map((t) => Number(t.amount)), vencimentos: live.map((t) => t.due_date) }, depois: d } });
+    return groupShape(db, await loadGroup(db, req, gid));
+  });
+  res.json(out);
+});
+
+titleGroups.post('/:gid/cancel', need('financeiro.titulos.cancelar'), async (req, res) => {
+  const gid = uuidParam(req.params.gid);
+  const d = parse(z.object({ reason: z.string().trim().min(3, 'informe o motivo').max(300) }), req.body);
+  const out = await orgTx(req.orgId, async (db) => {
+    const rows = await loadGroup(db, req, gid, true);
+    const can = rows.filter((t) => t.status !== 'cancelado' && !t.has_payment);
+    const kept = rows.filter((t) => t.status !== 'cancelado' && t.has_payment);
+    if (!can.length) throw new HttpError(409, kept.length ? 'Todas as parcelas têm baixa. Estorne as baixas antes de excluir o lançamento.' : 'O lançamento já está excluído.');
+    for (const t of can) await db.query("update titles set status='cancelado', cancel_reason=$2, cancelled_at=now(), updated_at=now(), version=version+1 where id=$1", [t.id, d.reason]);
+    await db.query("update approvals set status='cancelado' where entity='title' and entity_id = any($1::uuid[]) and status='pendente'", [can.map((t) => t.id)]);
+    await audit(db, { actor: actor(req), req, action: 'lancamento.excluido', entity: 'title_group', entityId: gid,
+      summary: `${baseDesc(rows[0].description)}: ${can.length} parcela(s) excluída(s)${kept.length ? `, ${kept.length} com baixa mantida(s)` : ''} — ${d.reason}` });
+    return { cancelled: can.length, kept: kept.length };
+  });
+  res.json(out);
 });

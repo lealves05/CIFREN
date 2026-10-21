@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Search, CheckCircle2, Eye, Pencil, Ban, ArrowUpFromLine, ArrowDownToLine, FilterX } from 'lucide-react';
+import { Plus, Search, CheckCircle2, Eye, Pencil, Ban, ArrowUpFromLine, ArrowDownToLine, FilterX, Layers } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api, qs } from '../lib/api';
 import { usePaged } from '../lib/useAsync';
@@ -42,8 +42,9 @@ export default function Titles({ kind }) {
   const showCompany = companies.length > 1 && !companyId;
   const rowActions = (t) => [
     { label: 'Ver detalhes', icon: Eye, onClick: () => actions.openDetails(t) },
-    can(P.titlesEdit) && t.status !== 'cancelado' && { label: 'Editar', icon: Pencil, onClick: () => actions.openEdit(t) },
-    can(P.titlesCancel) && canCancel(t) && { label: 'Cancelar', icon: Ban, onClick: () => actions.cancel(t), danger: true },
+    can(P.titlesEdit) && t.status !== 'cancelado' && { label: t.installments > 1 ? 'Editar só esta parcela' : 'Editar', icon: Pencil, onClick: () => actions.openEdit(t) },
+    can(P.titlesEdit) && t.group_id && t.installments > 1 && { label: 'Lançamento original (todas as parcelas)', icon: Layers, onClick: () => actions.openGroup(t) },
+    can(P.titlesCancel) && canCancel(t) && { label: t.installments > 1 ? 'Cancelar só esta parcela' : 'Cancelar', icon: Ban, onClick: () => actions.cancel(t), danger: true },
   ];
   const settleBtn = (t, cls = '') => can(P.titlesSettle) && canSettle(t) && (
     <button type="button" className={cx('btn-outline btn-sm', cls)} onClick={() => actions.openSettle(t)} aria-label={`Dar baixa em ${t.description}`}>

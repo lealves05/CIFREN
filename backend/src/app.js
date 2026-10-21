@@ -9,7 +9,7 @@ import { platformGate } from './platform.js';
 import authRoutes from './routes/auth.js';
 import { companies, users, roles, auditRoutes } from './routes/admin.js';
 import { counterparties, categoriesRouter, costCenters, accounts } from './routes/cadastros.js';
-import { titles, settlements, dashboard } from './routes/titles.js';
+import { titles, settlements, dashboard, titleGroups } from './routes/titles.js';
 import { platformApi, billing } from './routes/platform.js';
 import { approvals, approvalRules } from './routes/approvals.js';
 import { reconciliation } from './routes/reconciliation.js';
@@ -67,6 +67,7 @@ export function createApp() {
   priv.use('/cost-centers', costCenters);
   priv.use('/accounts', accounts);
   priv.use('/titles', titles);
+  priv.use('/title-groups', titleGroups);
   priv.use('/settlements', settlements);
   priv.use('/dashboard', dashboard);
   priv.use('/approvals', approvals);

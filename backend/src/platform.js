@@ -17,7 +17,7 @@ let hubDownUntil = 0;
 
 /** Módulos que a central liga/desliga por plano. `routes` = prefixos da API interna. */
 export const FEATURES = {
-  financeiro: { label: 'Contas a pagar e a receber, caixa e painel', routes: ['/titles', '/settlements', '/dashboard', '/approvals', '/approval-rules', '/insights'] },
+  financeiro: { label: 'Contas a pagar e a receber, caixa e painel', routes: ['/titles', '/title-groups', '/settlements', '/dashboard', '/approvals', '/approval-rules', '/insights'] },
   conciliacao_bancaria: { label: 'Conciliação bancária (extratos OFX/CSV)', routes: ['/reconciliation'] },
   recorrencias: { label: 'Compromissos recorrentes e previsão (estimado × real)', routes: ['/recurring'] },
   cobranca: { label: 'Cobrança por boleto e Pix', routes: ['/charges'] },

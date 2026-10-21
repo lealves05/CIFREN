@@ -354,3 +354,33 @@ test('auditoria continua íntegra depois de tudo', async () => {
   const r = await A.get('/api/audit/verify');
   if (r.status !== 404) assert.equal(r.data.ok, true, JSON.stringify(r.data));
 });
+
+test('lançamento original: editar todas as parcelas em aberto e excluir o lançamento errado', async () => {
+  const r = await A.post('/api/titles', { kind: 'pagar', company_id: ctx.company, description: 'Aluguel Barracao', due_date: '2026-10-20', amount: 72.22 * 4, installments: 4, category_id: ctx.catAluguel });
+  assert.equal(r.status, 201);
+  const t1 = (await A.get(`/api/titles/${r.data.ids[0]}`)).data;
+  assert.ok(t1.group_id);
+  const gid = t1.group_id;
+  let g = (await A.get(`/api/title-groups/${gid}`)).data;
+  assert.equal(g.description, 'Aluguel Barracao'); assert.equal(g.installments_total, 4); assert.equal(g.interval, 'mensal'); assert.equal(g.editable_count, 4);
+  // paga a 1ª: ela fica como está
+  assert.equal((await A.post(`/api/titles/${r.data.ids[0]}/settle`, { account_id: ctx.acc, paid_at: d(0), amount: g.items[0].amount })).status, 200);
+  const up = await A.put(`/api/title-groups/${gid}`, { description: 'Aluguel do barracão', amount: 80, first_due_date: '2026-12-05', counterparty_id: ctx.forn, installments_total: 6 });
+  assert.equal(up.status, 200, JSON.stringify(up.data));
+  g = up.data;
+  assert.equal(g.installments_total, 6); assert.equal(g.locked_count, 1);
+  assert.equal(g.items[0].amount, 72.22, 'parcela paga não muda');
+  assert.equal(g.items[0].description, 'Aluguel do barracão (1/6)');
+  assert.deepEqual(g.items.slice(1, 4).map((x) => x.due_date), ['2026-12-05', '2027-01-05', '2027-02-05']);
+  assert.ok(g.items.slice(1).every((x) => x.amount === 80));
+  assert.equal(g.counterparty.id, ctx.forn);
+  assert.equal(g.items.length, 6);
+  // reduzir para 3: tira as últimas em aberto
+  g = (await A.put(`/api/title-groups/${gid}`, { installments_total: 3 })).data;
+  assert.equal(g.installments_total, 3); assert.equal(g.items.filter((x) => x.status === 'cancelado').length, 3);
+  // excluir o lançamento: cancela as que não têm baixa e mantém a paga
+  assert.equal((await A.post(`/api/title-groups/${gid}/cancel`, {})).status, 400, 'motivo obrigatório');
+  const del = await A.post(`/api/title-groups/${gid}/cancel`, { reason: 'lançado errado' });
+  assert.equal(del.status, 200); assert.equal(del.data.cancelled, 2); assert.equal(del.data.kept, 1);
+  assert.equal((await B.get(`/api/title-groups/${gid}`)).status, 404, 'outra organização não vê');
+});
