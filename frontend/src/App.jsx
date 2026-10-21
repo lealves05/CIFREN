@@ -39,6 +39,7 @@ const NotificationSettings = lazy(() => import('./pages/settings/NotificationSet
 const Integrations = lazy(() => import('./pages/settings/Integrations'));
 const Security = lazy(() => import('./pages/settings/Security'));
 const ApprovalRules = lazy(() => import('./pages/settings/ApprovalRules'));
+const Support = lazy(() => import('./pages/Support'));
 
 function Splash() {
   return (
@@ -114,6 +115,7 @@ export default function App() {
             <Route path="configuracoes/seguranca" element={<Allow perms={[P.security]}><Security /></Allow>} />
             <Route path="configuracoes/alcadas" element={<Allow perms={[P.approvalRules]}><ApprovalRules /></Allow>} />
             <Route path="visao-geral" element={<Overview />} />
+            <Route path="suporte" element={<Support />} />
             <Route path="conta" element={<Account />} />
             <Route path="mais" element={<More />} />
             <Route path="*" element={<NotFound />} />

@@ -1,7 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { ChevronRight, LogOut } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { visibleGroups, OVERVIEW } from '../lib/nav';
+import { visibleGroups, OVERVIEW, SUPPORT } from '../lib/nav';
 import { OrgSwitcher, BOTTOM } from '../components/Layout';
 import { PageHeader } from '../components/ui';
 
@@ -24,6 +24,11 @@ export default function More() {
         <OVERVIEW.icon className="h-6 w-6 text-accent" aria-hidden="true" />
         <span className="flex-1"><span className="block text-sm font-semibold">Conheça o CIFREN</span><span className="block text-xs text-brand-fg/75">Mapa de tudo o que o sistema faz</span></span>
         <ChevronRight className="h-4 w-4" aria-hidden="true" />
+      </Link>
+      <Link to={SUPPORT.to} className="card mb-4 flex items-center gap-3 p-4">
+        <SUPPORT.icon className="h-6 w-6 text-accent" aria-hidden="true" />
+        <span className="flex-1"><span className="block text-sm font-semibold">Suporte e treinamento</span><span className="block text-xs text-ink-faint">Vídeo-aulas narradas, passo a passo</span></span>
+        <ChevronRight className="h-4 w-4 text-ink-faint" aria-hidden="true" />
       </Link>
       <div className="space-y-4">
         {groups.map((g) => (

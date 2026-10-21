@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { ChevronDown, LogOut, UserRound, Building2, Check, MoreHorizontal, Clock, Repeat, Send, Map as MapIcon } from 'lucide-react';
+import { ChevronDown, LogOut, UserRound, Building2, Check, MoreHorizontal, Clock, Repeat, Send, Map as MapIcon, PlayCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useUI } from '../context/UIContext';
-import { visibleGroups, visibleNav, OVERVIEW } from '../lib/nav';
+import { visibleGroups, visibleNav, OVERVIEW, SUPPORT } from '../lib/nav';
+import { lessonFor } from '../lib/training-help';
 import { daysUntil, date, plural } from '../lib/format';
 import { api, errorMessage, EVENTS } from '../lib/api';
 import { P, APPROVER_PERMS } from '../lib/permissions';
@@ -89,6 +90,19 @@ export function CompanyFilter({ className }) {
         {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
       </select>
     </div>
+  );
+}
+
+/** Botão "Aula" do topo: abre a vídeo-aula da tela atual (ou a lista de aulas). */
+function HelpLink() {
+  const { pathname } = useLocation();
+  if (pathname === SUPPORT.to) return null;
+  const l = lessonFor(pathname);
+  return (
+    <Link to={l ? `${SUPPORT.to}?aula=${l.n}` : SUPPORT.to} className="btn-ghost btn-sm text-accent" title={l ? `Aula ${l.n}: ${l.title}` : 'Vídeo-aulas do CIFREN'}
+      aria-label={l ? `Ver a aula desta tela: ${l.title}` : 'Ver as vídeo-aulas do CIFREN'}>
+      <PlayCircle className="h-4 w-4" aria-hidden="true" /> <span className="hidden sm:inline">Aula</span>
+    </Link>
   );
 }
 
@@ -236,6 +250,9 @@ export default function Layout() {
           <NavLink to={OVERVIEW.to} className={({ isActive }) => cx('focus-ring flex items-center gap-3 rounded-app-sm px-3 py-2 text-xs font-medium', isActive ? 'bg-brand-soft text-brand-fg' : 'text-brand-fg/70 hover:text-brand-fg')}>
             <MapIcon className="h-4 w-4" aria-hidden="true" /> {OVERVIEW.label}
           </NavLink>
+          <NavLink to={SUPPORT.to} className={({ isActive }) => cx('focus-ring flex items-center gap-3 rounded-app-sm px-3 py-2 text-xs font-medium', isActive ? 'bg-brand-soft text-brand-fg' : 'text-brand-fg/70 hover:text-brand-fg')}>
+            <SUPPORT.icon className="h-4 w-4" aria-hidden="true" /> {SUPPORT.label}
+          </NavLink>
           <p className="px-3 pt-1 text-[11px] text-brand-fg/60">Um sistema LORLER</p>
         </div>
       </aside>
@@ -247,6 +264,7 @@ export default function Layout() {
           <div className="min-w-0 flex-1"><OrgSwitcher /></div>
           <CompanyFilter className="hidden sm:block" />
           {canSend && <button type="button" className="btn-outline hidden md:inline-flex" onClick={() => setCapture(true)}><Send className="h-4 w-4" aria-hidden="true" /> Enviar documento</button>}
+          <HelpLink />
           <NotificationBell />
           <UserMenu />
         </header>

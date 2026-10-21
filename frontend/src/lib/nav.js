@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, ArrowUpFromLine, ArrowDownToLine, FolderOpen, Building2, Users, ShieldCheck, UserRound,
   Wallet, ClipboardCheck, Landmark, Repeat, ShoppingCart, Receipt, FileText, BarChart3, LineChart, Table2,
-  Target, AlarmClock, Download, Sparkles, Settings, Plug, Bot, Bell, Lock, Scale, Map as MapIcon, ShoppingBag, HandCoins,
+  Target, AlarmClock, Download, Sparkles, Settings, Plug, Bot, Bell, Lock, Scale, Map as MapIcon, ShoppingBag, HandCoins, GraduationCap,
 } from 'lucide-react';
 import { P, APPROVER_PERMS } from './permissions';
 
@@ -59,6 +59,7 @@ export const NAV_GROUPS = [
 ];
 
 export const OVERVIEW = { to: '/visao-geral', label: 'Visão geral do CIFREN', short: 'Visão geral', icon: MapIcon, perms: null };
+export const SUPPORT = { to: '/suporte', label: 'Suporte e treinamento', short: 'Aulas', icon: GraduationCap, perms: null };
 
 export const NAV = NAV_GROUPS.flatMap((g) => g.items);
 

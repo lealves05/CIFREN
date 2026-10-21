@@ -1,0 +1,7 @@
+{
+  "name": "cifren-videos",
+  "private": true,
+  "type": "module",
+  "description": "Gravação das vídeo-aulas do CIFREN (Playwright + narração Kokoro + ffmpeg)",
+  "dependencies": { "playwright": "^1.55.0", "pg": "^8.13.0" }
+}
