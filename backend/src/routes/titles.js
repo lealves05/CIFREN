@@ -98,7 +98,9 @@ titles.get('/', need('financeiro.titulos.visualizar'), async (req, res) => {
   if (isUuid(req.query.company_id)) add('t.company_id = ?', req.query.company_id);
   if (req.companyScope) add('t.company_id = any(?::uuid[])', req.companyScope);
   if (isUuid(req.query.counterparty_id)) add('t.counterparty_id = ?', req.query.counterparty_id);
-  if (isUuid(req.query.category_id)) add('t.category_id = ?', req.query.category_id);
+  // categoria: a principal traz junto as subcategorias; 'sem' = lançamentos sem categoria
+  if (req.query.category_id === 'sem') w.push('t.category_id is null');
+  else if (isUuid(req.query.category_id)) add('t.category_id in (select c2.id from categories c2 where c2.id = ? or c2.parent_id = ?)', req.query.category_id, req.query.category_id);
   if (req.query.q) { const like = `%${likeEsc(String(req.query.q).slice(0, 80))}%`; add('(t.description ilike ? or t.document_number ilike ? or cp.name ilike ?)', like, like, like); }
   const where = w.length ? `where ${w.join(' and ')}` : '';
   const out = await orgTx(req.orgId, async (db) => {

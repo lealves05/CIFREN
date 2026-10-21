@@ -11,6 +11,8 @@ import { PageHeader, Tabs, Badge, Loading, ErrorState, EmptyState, LoadMore, Inl
 import { CompanyFilter } from '../components/Layout';
 import ActionMenu from '../components/ActionMenu';
 import { useTitleActions } from '../components/titles/useTitleActions';
+import { categoryTree } from '../components/CategorySelect';
+import { loadRefs } from '../lib/refData';
 
 export default function Titles({ kind }) {
   const { can, companyId, companies } = useAuth();
@@ -21,11 +23,16 @@ export default function Titles({ kind }) {
   const [to, setTo] = useState('');
   const [q, setQ] = useState('');
   const [qDebounced, setQDebounced] = useState('');
+  const [category, setCategory] = useState('');
+  const [categories, setCategories] = useState([]);
+
+  useEffect(() => { loadRefs(['categories']).then((r) => setCategories(r.categories)); }, []);
+  const catTree = useMemo(() => categoryTree(categories, k.categoryType), [categories, k.categoryType]);
 
   useEffect(() => { const t = setTimeout(() => setQDebounced(q.trim()), 300); return () => clearTimeout(t); }, [q]);
 
-  const fetchPage = (cursor) => api.get(`/titles${qs({ kind, status, from, to, q: qDebounced, company_id: companyId, limit: 50, cursor })}`);
-  const list = usePaged(fetchPage, [kind, status, from, to, qDebounced, companyId]);
+  const fetchPage = (cursor) => api.get(`/titles${qs({ kind, status, from, to, q: qDebounced, category_id: category, company_id: companyId, limit: 50, cursor })}`);
+  const list = usePaged(fetchPage, [kind, status, from, to, qDebounced, category, companyId]);
   const actions = useTitleActions({ kind, onChanged: list.reload });
 
   // atalho vindo do painel: /pagar?novo=1
@@ -38,7 +45,7 @@ export default function Titles({ kind }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totals = list.extra?.totals;
-  const filtered = !!(from || to || qDebounced);
+  const filtered = !!(from || to || qDebounced || category);
   const showCompany = companies.length > 1 && !companyId;
   const rowActions = (t) => [
     { label: 'Ver detalhes', icon: Eye, onClick: () => actions.openDetails(t) },
@@ -53,7 +60,7 @@ export default function Titles({ kind }) {
   );
 
   const emptyText = useMemo(() => {
-    if (filtered) return { title: 'Nada encontrado com esses filtros', body: 'Tente mudar o período ou a busca.' };
+    if (filtered) return { title: 'Nada encontrado com esses filtros', body: 'Tente mudar a categoria, o período ou a busca.' };
     switch (status) {
       case 'vencidos': return { title: 'Nada vencido', body: kind === 'pagar' ? 'Ótimo! Nenhuma conta atrasada.' : 'Ótimo! Nenhum cliente em atraso.' };
       case 'pagos': return { title: kind === 'pagar' ? 'Nenhuma conta paga ainda' : 'Nenhum recebimento ainda', body: 'Quando você der baixa numa conta, ela aparece aqui.' };
@@ -70,16 +77,29 @@ export default function Titles({ kind }) {
 
       <div className="card mb-4">
         <Tabs label="Situação" tabs={STATUS_TABS} value={status} onChange={setStatus} className="px-2" />
-        <div className="grid gap-3 p-3 sm:grid-cols-2 lg:grid-cols-[1fr_auto_auto_auto_auto] lg:items-end">
+        <div className="grid gap-3 p-3 sm:grid-cols-2 lg:grid-cols-[1fr_minmax(11rem,14rem)_auto_auto_auto_auto] lg:items-end">
           <div className="relative sm:col-span-2 lg:col-span-1">
             <label htmlFor="busca-titulos" className="label">Buscar</label>
             <Search className="pointer-events-none absolute bottom-3 left-3 h-4 w-4 text-ink-faint" aria-hidden="true" />
             <input id="busca-titulos" type="search" className="input pl-9" placeholder={`Descrição, ${k.party} ou nº do documento`} value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
+          <div>
+            <label htmlFor="categoria-titulos" className="label">Categoria</label>
+            <select id="categoria-titulos" className="input" value={category} onChange={(e) => setCategory(e.target.value)}>
+              <option value="">Todas as categorias</option>
+              <option value="sem">Sem categoria</option>
+              {catTree.map((root) => (root.children.length ? (
+                <optgroup key={root.id} label={root.name}>
+                  <option value={root.id}>{root.name} (todas)</option>
+                  {root.children.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </optgroup>
+              ) : <option key={root.id} value={root.id}>{root.name}</option>))}
+            </select>
+          </div>
           <div><label htmlFor="de" className="label">Vencimento de</label><input id="de" type="date" className="input" value={from} onChange={(e) => setFrom(e.target.value)} /></div>
           <div><label htmlFor="ate" className="label">até</label><input id="ate" type="date" className="input" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} /></div>
           {companies.length > 1 && <div><span className="label">Empresa</span><CompanyFilter className="[&_select]:max-w-none" /></div>}
-          {filtered && <button type="button" className="btn-ghost" onClick={() => { setFrom(''); setTo(''); setQ(''); }}><FilterX className="h-4 w-4" aria-hidden="true" /> Limpar</button>}
+          {filtered && <button type="button" className="btn-ghost" onClick={() => { setFrom(''); setTo(''); setQ(''); setCategory(''); }}><FilterX className="h-4 w-4" aria-hidden="true" /> Limpar</button>}
         </div>
       </div>
 
