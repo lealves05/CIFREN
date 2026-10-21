@@ -92,7 +92,7 @@ export async function recalcOpen(db, fromMonth, memberId = null) {
 
 /** Gera as mensalidades que faltam de um associado: do mês de início até o mês que vence nos próximos 15 dias (no máximo 24 meses para trás). */
 export async function generateFor(db, m, userId = null) {
-  if (m.status !== 'ativo') return 0;
+  if (m.status !== 'ativo' || m.charge_fees === false) return 0;
   const day = today();
   let first = monthStart(m.start_month);
   const limitBack = addMonths(monthStart(day), -24);

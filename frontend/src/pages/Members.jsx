@@ -25,6 +25,7 @@ const STATUS = { ativo: ['Ativo', 'positive'], suspenso: ['Suspenso', 'warn'], e
 const CHANNEL = { email: 'E-mail', whatsapp: 'WhatsApp', whatsapp_link: 'WhatsApp (link)' };
 const KIND = { atraso: 'atraso', antes: 'lembrete', manual: 'manual' };
 const WEEKDAYS = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+const RUSTEN_KIND = { fiado: 'Fiado', pagamento_fiado: 'Pagamento de fiado', credito: 'Crédito antecipado', uso_credito: 'Uso de crédito', estorno: 'Estorno', ajuste: 'Ajuste' };
 const monthLabel = (m) => (m ? `${m.slice(5, 7)}/${m.slice(0, 4)}` : '');
 
 function situation(m) {
@@ -46,10 +47,10 @@ function MemberForm({ open, onClose, item, onSaved, feeInfo, onGoFees }) {
     setError('');
     loadRefs(['categories']).then((r) => setCats(r.categories));
     setF(item ? {
-      name: item.name, document: item.document || '', email: item.email || '', whatsapp: item.whatsapp_display || '', special: item.custom_fee != null, monthly_fee: item.custom_fee, due_day: item.due_day,
+      name: item.name, document: item.document || '', email: item.email || '', whatsapp: item.whatsapp_display || '', special: item.custom_fee != null, charge_fees: item.charge_fees !== false, monthly_fee: item.custom_fee, due_day: item.due_day,
       start_month: item.start_month, company_id: item.company?.id, category_id: item.category?.id || null, notify_email: item.notify_email, notify_whatsapp: item.notify_whatsapp,
       notes: item.notes || '', apply_to_open: true,
-    } : { name: '', document: '', email: '', whatsapp: '', special: false, monthly_fee: null, due_day: 10, start_month: today().slice(0, 7), company_id: companyId || companies[0]?.id,
+    } : { name: '', document: '', email: '', whatsapp: '', special: false, charge_fees: true, monthly_fee: null, due_day: 10, start_month: today().slice(0, 7), company_id: companyId || companies[0]?.id,
       category_id: null, notify_email: true, notify_whatsapp: true, notes: '' });
   }, [open, item]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (k) => (v) => setF((x) => ({ ...x, [k]: v && v.target ? v.target.value : v }));
@@ -58,8 +59,8 @@ function MemberForm({ open, onClose, item, onSaved, feeInfo, onGoFees }) {
     setError('');
     if (!f.name?.trim()) return setError('Informe o nome do associado.');
     if (f.special && !(f.monthly_fee > 0)) return setError('Informe o valor especial ou desligue a opção.');
-    if (!f.special && !feeInfo?.current && !feeInfo?.items?.length) return setError('Cadastre primeiro o valor da mensalidade na aba "Valores da mensalidade".');
-    const body = { name: f.name.trim(), document: f.document.trim() || null, email: f.email.trim() || null, whatsapp: f.whatsapp.trim() || null, monthly_fee: f.special ? f.monthly_fee : null,
+    if (f.charge_fees !== false && !f.special && !feeInfo?.current && !feeInfo?.items?.length) return setError('Cadastre primeiro o valor da mensalidade na aba "Valores da mensalidade".');
+    const body = { name: f.name.trim(), document: f.document.trim() || null, email: f.email.trim() || null, whatsapp: f.whatsapp.trim() || null, monthly_fee: f.special ? f.monthly_fee : null, charge_fees: f.charge_fees !== false,
       due_day: Number(f.due_day), start_month: f.start_month, company_id: f.company_id, category_id: f.category_id || null, notify_email: f.notify_email, notify_whatsapp: f.notify_whatsapp,
       notes: f.notes.trim() || null };
     setSaving(true);
@@ -105,6 +106,7 @@ function MemberForm({ open, onClose, item, onSaved, feeInfo, onGoFees }) {
           ) : (
             <Notice tone="warn" title="Falta o valor da mensalidade">Cadastre o valor na aba <button type="button" className="underline" onClick={onGoFees}>Valores da mensalidade</button>; ele vale para todos os associados.</Notice>
           )}
+          <Toggle label="Cobrar mensalidade" checked={f.charge_fees !== false} onChange={set('charge_fees')} hint="Desligado: o associado fica no cadastro (ex.: só fiado do RUSTEN), sem mensalidade." />
           <Toggle label="Valor especial para este associado" checked={f.special} onChange={set('special')} hint="Ex.: desconto ou isenção parcial. Se mudar depois, vale a partir do próximo mês." />
           {f.special && <MoneyInput label="Valor especial" value={f.monthly_fee} onChange={set('monthly_fee')} />}
         </fieldset>
@@ -265,6 +267,9 @@ function MemberDetails({ id, onClose, onEdit, onChanged }) {
         <div className="space-y-6">
           <div className="flex flex-wrap gap-1"><Badge tone={STATUS[m.status][1]}>{STATUS[m.status][0]}</Badge>
             {overdue.length > 0 && <Badge tone="danger">{overdue.length} mensalidade(s) em atraso · {money(overdue.reduce((a, f) => a + f.open, 0))}</Badge>}</div>
+          {m.source === 'rusten' && (
+            <p className="rounded-app-sm border border-line bg-muted/50 px-3 py-2 text-xs text-ink-soft">Vem do RUSTEN (cliente com a etiqueta <strong>Associado</strong>). Nome e contatos são atualizados por lá; fiado e crédito chegam sozinhos.</p>
+          )}
           <dl className="grid grid-cols-2 gap-3 text-sm">
             <div><dt className="text-xs text-ink-faint">WhatsApp</dt><dd>{m.whatsapp_display || '—'}{m.whatsapp && !m.notify_whatsapp && <span className="text-xs text-ink-faint"> (sem avisos)</span>}</dd></div>
             <div><dt className="text-xs text-ink-faint">E-mail</dt><dd className="break-all">{m.email || '—'}{m.email && !m.notify_email && <span className="text-xs text-ink-faint"> (sem avisos)</span>}</dd></div>
@@ -297,6 +302,25 @@ function MemberDetails({ id, onClose, onEdit, onChanged }) {
               </ul>
             )}
           </section>
+          {m.account && (
+            <section>
+              <h3 className="mb-2 text-sm font-semibold">Conta no RUSTEN (fiado e crédito)</h3>
+              <div className="mb-2 grid grid-cols-2 gap-2">
+                <div className="rounded-app-sm bg-muted p-2"><div className="text-xs text-ink-faint">Fiado em aberto</div><div className={cx('font-semibold tabular-nums', m.account.debt > 0 && 'text-danger')}>{money(m.account.debt)}</div></div>
+                <div className="rounded-app-sm bg-muted p-2"><div className="text-xs text-ink-faint">Crédito do cliente</div><div className="font-semibold tabular-nums text-positive">{money(m.account.credit)}</div></div>
+              </div>
+              {!m.account.entries.length ? <p className="text-sm text-ink-soft">Nenhum lançamento ainda.</p> : (
+                <ul className="divide-y divide-line rounded-app-sm border border-line text-sm">
+                  {m.account.entries.slice(0, 15).map((e) => (
+                    <li key={e.external_id} className="flex items-center justify-between gap-2 px-3 py-1.5">
+                      <span className="min-w-0 truncate">{RUSTEN_KIND[e.kind] || e.kind}{e.reason ? ` · ${e.reason}` : ''}<span className="block text-xs text-ink-faint">{new Date(e.occurred_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</span></span>
+                      <span className={cx('shrink-0 tabular-nums', e.amount < 0 ? 'text-danger' : 'text-positive')}>{e.amount > 0 ? '+' : '−'}{money(Math.abs(e.amount))}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
           <section>
             <h3 className="mb-2 text-sm font-semibold">Avisos enviados</h3>
             {!m.reminders.length ? <p className="text-sm text-ink-soft">Nenhum aviso enviado.</p> : (
@@ -379,7 +403,7 @@ function MembersList({ reloadKey, onOpen, onEdit, onChanged }) {
                 {items.map((m) => { const s = situation(m); return (
                   <tr key={m.id} className={cx(m.overdue.count > 0 && 'bg-danger-soft/40')}>
                     <td className="max-w-[240px]"><button type="button" className="focus-ring block max-w-full truncate rounded text-left font-medium hover:underline" onClick={() => onOpen(m)}>{m.name}</button>
-                      <div className="text-xs text-ink-faint">Nº {m.number}{m.last_payment && ` · último pagamento ${date(m.last_payment)}`}</div></td>
+                      <div className="text-xs text-ink-faint">{m.source === 'rusten' && <Badge tone="brand" className="mr-1">RUSTEN</Badge>}Nº {m.number}{m.last_payment && ` · último pagamento ${date(m.last_payment)}`}</div></td>
                     <td className="text-xs text-ink-soft"><div>{m.whatsapp_display || <span className="text-ink-faint">sem WhatsApp</span>}</div><div className="max-w-[200px] truncate">{m.email || <span className="text-ink-faint">sem e-mail</span>}</div></td>
                     <td className="whitespace-nowrap text-right tabular-nums">{m.monthly_fee != null ? money(m.monthly_fee) : '—'}{m.custom_fee != null && <div className="text-xs text-ink-faint">especial</div>}</td>
                     <td className="whitespace-nowrap">dia {m.due_day}</td>

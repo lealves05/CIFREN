@@ -12,17 +12,64 @@ import { limitByKey } from '../security.js';
 import { needsApproval, requestApproval } from '../lib/approvals.js';
 import { BALANCE_SQL } from './cadastros.js';
 import { PAID, settleTitle } from './titles.js';
+import { upsertMember, applyEntry, settingsOf, accountOf, DEFAULTS as RUSTEN_DEFAULTS } from '../lib/rusten.js';
 
 const SYSTEMS = ['orbi', 'torven', 'rusten', 'apolven', 'cerebro'];
-const SCOPES = { cerebro: ['indicators:read'], default: ['movements:write', 'indicators:read'] };
+const SCOPES = { cerebro: ['indicators:read'], rusten: ['movements:write', 'indicators:read', 'members:write'], default: ['movements:write', 'indicators:read'] };
+const SYSTEM_NAMES = { orbi: 'ORBI', torven: 'TORVEN', rusten: 'RUSTEN', apolven: 'APOLVEN', cerebro: 'Cérebro' };
+const SYSTEM_URL = (s) => `https://${s}.lorler.com.br`;
+/** Código de conexão: endpoint + chave + organização num texto só (o outro sistema só cola ou abre o link). */
+const connectCode = ({ key, system, org }) => `LORLER1.${Buffer.from(JSON.stringify({ u: `${publicBase()}/api/integrations/lorler/v1`, k: key, o: org, s: system })).toString('base64url')}`;
 const actor = (req) => ({ id: req.user.id, name: req.user.name });
 const publicBase = () => (process.env.PUBLIC_URL || 'https://cifren.lorler.com.br').replace(/\/+$/, '');
 
 export const integrations = Router();
 integrations.get('/', need('integracoes.gerenciar'), async (req, res) => {
-  const items = await q(`select id, system, name, prefix, scopes, created_at, last_used_at, revoked_at is null as active from integration_keys where org_id=$1 order by revoked_at nulls first, created_at desc`, [req.orgId]);
-  res.json({ items: items.rows, endpoint: `${publicBase()}/api/integrations/lorler/v1` });
+  const items = (await q(`select id, system, name, prefix, scopes, settings, created_at, last_used_at, last_sync_at, revoked_at is null as active from integration_keys
+      where org_id=$1 order by revoked_at nulls first, created_at desc`, [req.orgId])).rows;
+  const stats = await orgTx(req.orgId, async (db) => ({
+    rusten: await db.one(`select (select count(*)::int from members where source='rusten') as members,
+        (select count(*)::int from members where source='rusten' and status='ativo') as active_members,
+        (select count(*)::int from member_account where source='rusten') as entries,
+        (select coalesce(round(sum(t.amount - ${PAID}),2),0) from titles t where t.source='rusten' and t.external_id like 'acc:%' and t.status in ('aberto','parcial')) as fiado_open`),
+  }));
+  const systems = Object.keys(SYSTEM_NAMES).map((sys) => {
+    const k = items.find((x) => x.system === sys && x.active);
+    return { system: sys, name: SYSTEM_NAMES[sys], url: SYSTEM_URL(sys), connected: !!k, key_id: k?.id || null, prefix: k?.prefix || null, connected_at: k?.created_at || null,
+      last_used_at: k?.last_used_at || null, settings: sys === 'rusten' ? { ...RUSTEN_DEFAULTS, ...(k?.settings || {}) } : (k?.settings || {}),
+      features: sys === 'rusten' ? ['Associados (etiqueta Associado no cliente)', 'Fiado e crédito do cliente', 'Pagamentos recebidos no CIFREN voltam ao RUSTEN']
+        : sys === 'cerebro' ? ['Indicadores do financeiro (só leitura)'] : ['Contas a pagar e a receber geradas no sistema'],
+      stats: sys === 'rusten' ? { members: stats.rusten.members, active_members: stats.rusten.active_members, entries: stats.rusten.entries, fiado_open: Number(stats.rusten.fiado_open) } : null };
+  });
+  res.json({ systems, items, endpoint: `${publicBase()}/api/integrations/lorler/v1` });
 });
+/** Conectar um sistema: gera a chave (a anterior do mesmo sistema é revogada) e devolve o código de conexão e o link para abrir o sistema já conectando. */
+integrations.post('/connect', need('integracoes.gerenciar'), async (req, res) => {
+  const d = parse(z.object({ system: z.enum(SYSTEMS) }), req.body);
+  const key = `ck_${d.system}_${randomToken(30)}`;
+  const prefix = key.slice(0, `ck_${d.system}_`.length + 4);
+  const prev = (await q('update integration_keys set revoked_at=now() where org_id=$1 and system=$2 and revoked_at is null returning settings', [req.orgId, d.system])).rows[0];
+  const r = await one(`insert into integration_keys (org_id, system, name, prefix, key_hash, scopes, settings, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
+    [req.orgId, d.system, `Conexão ${SYSTEM_NAMES[d.system]}`, prefix, sha256(key), SCOPES[d.system] || SCOPES.default, prev?.settings || {}, req.user.id]);
+  await orgTx(req.orgId, (db) => audit(db, { actor: actor(req), req, action: 'integracao.conectar', entity: 'integration', entityId: r.id, summary: `${SYSTEM_NAMES[d.system]}: novo código de conexão (${prefix}…)${prev ? '; conexão anterior encerrada' : ''}` }));
+  const code = connectCode({ key, system: d.system, org: req.org.name });
+  res.status(201).json({ id: r.id, prefix, key, code, connect_url: `${SYSTEM_URL(d.system)}/configuracoes/cifren#codigo=${code}` });
+});
+integrations.put('/:id/settings', need('integracoes.gerenciar'), async (req, res) => {
+  const id = uuidParam(req.params.id);
+  const d = parse(z.object({ member_fees: z.boolean().optional(), fiado_due_days: z.coerce.number().int().min(0).max(365).optional(),
+    account_id: z.string().uuid().nullable().optional(), company_id: z.string().uuid().nullable().optional() }), req.body);
+  const k = await one('select settings, system from integration_keys where id=$1 and org_id=$2 and revoked_at is null', [id, req.orgId]);
+  if (!k) throw new HttpError(404, 'Conexão não encontrada.');
+  await orgTx(req.orgId, async (db) => {
+    if (d.account_id && !(await db.one('select 1 from bank_accounts where id=$1 and active', [d.account_id]))) throw new HttpError(400, 'Conta não encontrada.');
+    if (d.company_id && !(await db.one('select 1 from companies where id=$1 and active', [d.company_id]))) throw new HttpError(400, 'Empresa inválida.');
+    await audit(db, { actor: actor(req), req, action: 'integracao.ajuste', entity: 'integration', entityId: id, summary: `${SYSTEM_NAMES[k.system]}: opções da conexão`, data: d });
+  });
+  await q('update integration_keys set settings = settings || $2::jsonb where id=$1', [id, JSON.stringify(d)]);
+  res.json({ ok: true });
+});
+// compatível com a Fase B: criar chave avulsa
 integrations.post('/', need('integracoes.gerenciar'), async (req, res) => {
   const d = parse(z.object({ system: z.enum(SYSTEMS), name: z.string().trim().min(2).max(80) }), req.body);
   const key = `ck_${d.system}_${randomToken(30)}`;
@@ -30,7 +77,7 @@ integrations.post('/', need('integracoes.gerenciar'), async (req, res) => {
   const r = await one(`insert into integration_keys (org_id, system, name, prefix, key_hash, scopes, created_by) values ($1,$2,$3,$4,$5,$6,$7) returning id`,
     [req.orgId, d.system, d.name, prefix, sha256(key), SCOPES[d.system] || SCOPES.default, req.user.id]);
   await orgTx(req.orgId, (db) => audit(db, { actor: actor(req), req, action: 'integracao.chave_criada', entity: 'integration', entityId: r.id, summary: `${d.system.toUpperCase()}: ${d.name} (${prefix}…)` }));
-  res.status(201).json({ id: r.id, key, prefix });
+  res.status(201).json({ id: r.id, key, prefix, code: connectCode({ key, system: d.system, org: req.org.name }) });
 });
 integrations.delete('/:id', need('integracoes.gerenciar'), async (req, res) => {
   const id = uuidParam(req.params.id);
@@ -46,10 +93,10 @@ async function bearer(req, res, scope) {
   const m = String(req.get('authorization') || '').match(/^Bearer\s+(ck_[a-z]+_[\w-]{20,80})$/);
   if (!m) throw new HttpError(401, 'Chave de integração ausente.');
   await limitByKey('integracao', sha256(m[1]).slice(0, 16), 120, 60, res);
-  const k = await one('select id, org_id, system, scopes from integration_keys where key_hash=$1 and revoked_at is null', [sha256(m[1])]);
+  const k = await one('select id, org_id, system, scopes, settings from integration_keys where key_hash=$1 and revoked_at is null', [sha256(m[1])]);
   if (!k) throw new HttpError(401, 'Chave de integração inválida ou revogada.');
   if (!k.scopes.includes(scope)) throw new HttpError(403, 'Esta chave não pode fazer isto.');
-  q('update integration_keys set last_used_at=now() where id=$1', [k.id]).catch(() => {});
+  q('update integration_keys set last_used_at=now(), last_sync_at=now() where id=$1', [k.id]).catch(() => {});
   return k;
 }
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'data AAAA-MM-DD');
@@ -148,3 +195,44 @@ lorlerApi.get('/indicators', async (req, res) => {
   });
   res.json(out);
 });
+
+// ---------------- RUSTEN: associados, fiado e crédito ----------------
+lorlerApi.get('/hello', async (req, res) => {
+  const k = await bearer(req, res, 'members:write');
+  const o = await one('select name from organizations where id=$1', [k.org_id]);
+  res.json({ ok: true, system: k.system, org: o?.name || '', features: ['members', 'account', 'payments'], settings: { member_fees: settingsOf(k).member_fees } });
+});
+const memberItem = z.object({ external_id: z.coerce.string().trim().min(1).max(80), name: z.string().trim().min(1).max(160),
+  cpf: z.string().regex(/^\d{11}$/).nullable().optional(), phone: z.string().max(30).nullable().optional(), email: z.string().max(200).nullable().optional(), active: z.boolean() });
+lorlerApi.post('/members', async (req, res) => {
+  const k = await bearer(req, res, 'members:write');
+  const b = parse(z.object({ items: z.array(memberItem).min(1).max(200) }), req.body);
+  const items = [];
+  for (const it of b.items) {
+    try { items.push({ external_id: it.external_id, ...(await orgTx(k.org_id, (db) => upsertMember(db, k, it))) }); }
+    catch (e) { items.push({ external_id: it.external_id, result: 'error', error: { code: 'invalid', message: e instanceof HttpError ? e.message : 'Erro ao gravar.' } }); if (!(e instanceof HttpError)) console.error('[rusten/members]', e.message); }
+  }
+  res.json({ items });
+});
+const entryItem = z.object({ external_id: z.coerce.string().trim().min(1).max(80), customer_external_id: z.coerce.string().trim().min(1).max(80),
+  kind: z.enum(['credito', 'uso_credito', 'fiado', 'pagamento_fiado', 'estorno', 'ajuste']), amount_cents: z.number().int().refine((v) => v !== 0 && Math.abs(v) <= 1e11, 'valor inválido'),
+  reverses_external_id: z.coerce.string().max(80).nullable().optional(), reason: z.string().max(300).nullable().optional(), created_at: z.string().max(40) });
+lorlerApi.post('/account', async (req, res) => {
+  const k = await bearer(req, res, 'members:write');
+  const b = parse(z.object({ items: z.array(entryItem).min(1).max(500) }), req.body);
+  const items = [];
+  for (const it of b.items) {
+    try { items.push({ external_id: it.external_id, ...(await orgTx(k.org_id, (db) => applyEntry(db, k, it))) }); }
+    catch (e) { items.push({ external_id: it.external_id, result: 'error', error: { code: 'invalid', message: e instanceof HttpError ? e.message : 'Erro ao gravar.' } }); if (!(e instanceof HttpError)) console.error('[rusten/account]', e.message); }
+  }
+  res.json({ items });
+});
+lorlerApi.get('/payments', async (req, res) => {
+  const k = await bearer(req, res, 'members:write');
+  const after = /^\d{1,18}$/.test(String(req.query.after || '')) ? String(req.query.after) : '0';
+  const rows = await orgTx(k.org_id, (db) => db.all(`select id, type, customer_external_id, amount, paid_at, note from integration_feed
+      where system=$1 and id > $2::bigint order by id limit 200`, [k.system, after]));
+  const items = rows.map((r) => ({ cursor: String(r.id), type: r.type, customer_external_id: r.customer_external_id, amount_cents: Math.round(Number(r.amount) * 100), paid_at: r.paid_at, note: r.note }));
+  res.json({ items, next_cursor: items.length ? items.at(-1).cursor : after });
+});
+export { accountOf };

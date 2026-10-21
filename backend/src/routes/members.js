@@ -33,6 +33,7 @@ const memberSchema = z.object({
   start_month: monthStr,
   category_id: z.string().refine(isUuid).optional().nullable(),
   notify_email: z.boolean().default(true), notify_whatsapp: z.boolean().default(true),
+  charge_fees: z.boolean().default(true),
   notes: optText(1000),
 });
 
@@ -45,7 +46,7 @@ function shape(req, m, extra = {}, table = null) {
     custom_fee: m.monthly_fee != null ? Number(m.monthly_fee) : null,
     monthly_fee: m.monthly_fee != null ? Number(m.monthly_fee) : table ? tableFeeAt(table, `${today().slice(0, 7)}-01`) : null, due_day: m.due_day, start_month: String(m.start_month).slice(0, 7), end_month: m.end_month ? String(m.end_month).slice(0, 7) : null,
     status: m.status, category: m.category || (m.category_id ? { id: m.category_id } : null), notify_email: m.notify_email, notify_whatsapp: m.notify_whatsapp, notes: m.notes,
-    created_at: m.created_at, masked: !full, ...extra };
+    source: m.source || null, charge_fees: m.charge_fees !== false, created_at: m.created_at, masked: !full, ...extra };
 }
 async function loadMember(db, req, id, lock = false) {
   const m = await db.one(`select * from members where id=$1 ${lock ? 'for update' : ''}`, [uuidParam(id)]);
@@ -237,13 +238,13 @@ members.post('/', need('associados.gerenciar'), async (req, res) => {
     if (!(await db.one('select 1 from companies where id=$1 and active', [d.company_id]))) throw new HttpError(400, 'Empresa inválida.');
     if (d.category_id) { const c = await db.one('select type from categories where id=$1', [d.category_id]); if (!c || c.type !== 'receita') throw new HttpError(400, 'Use uma categoria de receita.'); }
     const table = await feeTable(db);
-    if (d.monthly_fee == null && !table.length) throw new HttpError(409, 'Cadastre primeiro o valor da mensalidade (aba "Valores da mensalidade"). Ele vale para todos os associados.', { code: 'FEE_NOT_SET' });
+    if (d.charge_fees !== false && d.monthly_fee == null && !table.length) throw new HttpError(409, 'Cadastre primeiro o valor da mensalidade (aba "Valores da mensalidade"). Ele vale para todos os associados.', { code: 'FEE_NOT_SET' });
     const cat = d.category_id || await feeCategory(db);
     const cp = await db.one("insert into counterparties (org_id, kind, name, document, email, phone, notes) values ($1,'cliente',$2,$3,$4,$5,'Associado (mensalidades)') returning id",
       [req.orgId, d.name, d.document, d.email, d.whatsapp ? fmtPhone(normPhone(d.whatsapp)) : null]);
-    const m = await db.one(`insert into members (org_id, company_id, counterparty_id, name, document, email, whatsapp, monthly_fee, due_day, start_month, category_id, notify_email, notify_whatsapp, notes, created_by)
-        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning *`,
-    [req.orgId, d.company_id, cp.id, d.name, d.document, d.email, d.whatsapp ? normPhone(d.whatsapp) : null, d.monthly_fee ?? null, d.due_day, d.start_month, cat, d.notify_email, d.notify_whatsapp, d.notes, req.user.id]);
+    const m = await db.one(`insert into members (org_id, company_id, counterparty_id, name, document, email, whatsapp, monthly_fee, due_day, start_month, category_id, notify_email, notify_whatsapp, notes, created_by, charge_fees)
+        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) returning *`,
+    [req.orgId, d.company_id, cp.id, d.name, d.document, d.email, d.whatsapp ? normPhone(d.whatsapp) : null, d.monthly_fee ?? null, d.due_day, d.start_month, cat, d.notify_email, d.notify_whatsapp, d.notes, req.user.id, d.charge_fees !== false]);
     const n = await generateFor(db, m, req.user.id);
     await audit(db, { actor: actor(req), req, action: 'associado.criado', entity: 'member', entityId: m.id, summary: `${d.name}: mensalidade ${d.monthly_fee != null ? `especial ${brl(d.monthly_fee)}` : 'da tabela'} todo dia ${d.due_day} (${n} mensalidade(s) gerada(s))` });
     return shape(req, m, { generated: n }, table);
@@ -262,7 +263,10 @@ members.get('/:id', need('associados.visualizar', 'associados.gerenciar'), async
     const day = today();
     const reminders = await db.all('select id, title_id, channel, kind, step, status, error, sent_by_name, sent_at from member_reminders where member_id=$1 order by sent_at desc limit 60', [m.id]);
     const table = await feeTable(db);
+    const { accountOf } = await import('../lib/rusten.js');
+    const account = m.source ? await accountOf(db, m.id) : null;
     return shape(req, { ...m, company: co, category: cat }, {
+      account,
       fees: fees.map((t) => ({ id: t.id, month: String(t.competence_date || t.due_date).slice(0, 7), due_date: t.due_date, amount: Number(t.amount), paid: Number(t.paid), paid_at: t.paid_at,
         status: t.status, overdue: ['aberto', 'parcial'].includes(t.status) && t.due_date < day, open: round2(Number(t.amount) - Number(t.paid)) })),
       reminders,
@@ -280,7 +284,7 @@ members.put('/:id', need('associados.gerenciar'), async (req, res) => {
     if (has('company_id')) { assertCompany(req, d.company_id); }
     if (has('category_id') && d.category_id) { const c = await db.one('select type from categories where id=$1', [d.category_id]); if (!c || c.type !== 'receita') throw new HttpError(400, 'Use uma categoria de receita.'); }
     if (has('whatsapp')) d.whatsapp = d.whatsapp ? normPhone(d.whatsapp) : null;
-    const keys = ['company_id', 'name', 'document', 'email', 'whatsapp', 'monthly_fee', 'due_day', 'start_month', 'category_id', 'notify_email', 'notify_whatsapp', 'notes'].filter(has);
+    const keys = ['company_id', 'name', 'document', 'email', 'whatsapp', 'monthly_fee', 'due_day', 'start_month', 'category_id', 'notify_email', 'notify_whatsapp', 'charge_fees', 'notes'].filter(has);
     if (!keys.length) throw new HttpError(400, 'Nada para alterar.');
     const r = await db.one(`update members set ${keys.map((k, i) => `${k}=$${i + 2}`).join(',')}, updated_at=now() where id=$1 returning *`, [m.id, ...keys.map((k) => d[k])]);
     if (['name', 'document', 'email', 'whatsapp'].some(has) && r.counterparty_id) {
@@ -300,7 +304,7 @@ members.put('/:id', need('associados.gerenciar'), async (req, res) => {
       }
       changed += open.length;
     }
-    if (has('start_month') || has('due_day')) await generateFor(db, r, req.user.id);
+    if (has('start_month') || has('due_day') || has('charge_fees')) await generateFor(db, r, req.user.id);
     await audit(db, { actor: actor(req), req, action: 'associado.alterado', entity: 'member', entityId: m.id, summary: `${r.name}${changed ? ` (${changed} mensalidade(s) em aberto ajustada(s))` : ''}`,
       data: { antes: Object.fromEntries(keys.map((k) => [k, m[k]])), depois: Object.fromEntries(keys.map((k) => [k, d[k]])) } });
     return shape(req, r, { open_updated: changed }, await feeTable(db));

@@ -11,6 +11,7 @@ import { BALANCE_SQL } from './cadastros.js';
 import { needsApproval, requestApproval, assertApprovedForPayment } from '../lib/approvals.js';
 import { onTitleSettled } from '../lib/recurring.js';
 import { insightsFor } from '../lib/insights.js';
+import { feedFromSettlement } from '../lib/rusten.js';
 
 const actor = (req) => ({ id: req.user.id, name: req.user.name });
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'data inválida (use AAAA-MM-DD)')
@@ -258,6 +259,7 @@ export async function settleTitle(db, req, t, d, origin = 'manual') {
     [db.orgId, id, d.account_id, d.paid_at, d.amount, d.interest || 0, d.fine || 0, d.discount || 0, d.method || 'outro', d.notes || null, req?.user?.id || null, origin]);
     const status = await refreshStatus(db, id);
     if (status === 'pago') await onTitleSettled(db, id);
+    if (t.source === 'rusten') await feedFromSettlement(db, s.id, 'pagamento'); // fiado do RUSTEN recebido aqui: avisa o RUSTEN
     await audit(db, { actor: req?.user ? actor(req) : { id: null, name: 'Integração' }, req, action: 'titulo.baixado', entity: 'title', entityId: id,
       summary: `${t.description}: R$ ${Number(d.amount).toFixed(2)} em ${acc.name} (${status})${origin !== 'manual' ? ` — ${origin}` : ''}`, data: { settlement_id: s.id, ...d, origin } });
     return { ok: true, status, settlement_id: s.id };
@@ -289,8 +291,12 @@ settlements.post('/:id/reverse', need('financeiro.titulos.baixar'), async (req, 
     const t = await loadTitle(db, req, s.title_id, true);
     const again = await db.one('select reversed_at from settlements where id=$1 for update', [id]);
     if (again.reversed_at) throw new HttpError(409, 'Esta baixa já foi estornada.');
+    if (t.source === 'rusten' && (await db.one("select 1 from settlements where id=$1 and origin='integracao'", [id]))) {
+      throw new HttpError(409, 'Este recebimento veio do RUSTEN. Estorne lá, na conta do cliente: o CIFREN acompanha sozinho.');
+    }
     await db.query('update settlements set reversed_at=now(), reversed_by=$2, reverse_reason=$3 where id=$1', [id, req.user.id, d.reason]);
     const status = await refreshStatus(db, s.title_id);
+    if (t.source === 'rusten') await feedFromSettlement(db, id, 'estorno');
     await audit(db, { actor: actor(req), req, action: 'baixa.estornada', entity: 'title', entityId: s.title_id,
       summary: `${t.description}: estorno de R$ ${Number(s.amount).toFixed(2)} — ${d.reason}`, data: { settlement_id: id } });
     return { ok: true, status };

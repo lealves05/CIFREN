@@ -11,6 +11,7 @@ import { audit } from '../audit.js';
 import { parseOFX, parseCSV } from '../parsers.js';
 import { settleTitle, refreshStatus, PAID } from './titles.js';
 import { askClaude, firstJson, wrapData } from '../lib/ai.js';
+import { feedFromSettlement } from '../lib/rusten.js';
 
 export const reconciliation = Router();
 const actor = (req) => ({ id: req.user.id, name: req.user.name });
@@ -186,6 +187,7 @@ reconciliation.post('/lines/:id/undo', need('conciliacao.conciliar'), async (req
       await db.query("update settlements set reversed_at=now(), reversed_by=$2, reverse_reason='Conciliação desfeita' where id=$1 and reversed_at is null", [l.settlement_id, req.user.id]);
       const t = await db.one('select id, source, status from titles where id=$1', [l.title_id]);
       await refreshStatus(db, t.id);
+      if (t.source === 'rusten') await feedFromSettlement(db, l.settlement_id, 'estorno');
       if (t.source === 'conciliacao') await db.query("update titles set status='cancelado', cancel_reason='Conciliação desfeita', cancelled_at=now() where id=$1", [t.id]);
     }
     await db.query("update statement_lines set status='pendente', settlement_id=null, created_settlement=false, title_id=null, note=null, decided_by=$2, decided_at=now() where id=$1", [l.id, req.user.id]);
