@@ -31,6 +31,11 @@ export const CATALOG = [
     { code: 'relatorios.dre', label: 'Ver o DRE e os resultados', risk: 'medio' },
     { code: 'exportacao.contabil', label: 'Exportar os lançamentos para o contador', risk: 'medio' },
   ] },
+  { group: 'Associados e mensalidades', items: [
+    { code: 'associados.visualizar', label: 'Ver associados, mensalidades e o relatório de atrasos', risk: 'baixo' },
+    { code: 'associados.gerenciar', label: 'Cadastrar associados, mensalidades e enviar cobranças (e-mail/WhatsApp)', risk: 'medio' },
+    { code: 'associados.configurar', label: 'Configurar os avisos de cobrança (prazos, texto e WhatsApp)', risk: 'alto' },
+  ] },
   { group: 'Compras', items: [
     { code: 'compras.solicitar', label: 'Pedir compras', risk: 'baixo' },
     { code: 'compras.aprovar', label: 'Ver todas as compras da empresa', risk: 'medio' },
@@ -72,26 +77,27 @@ export const SYSTEM_ROLES = [
   { key: 'dono', name: 'Dono', permissions: ALL },
   { key: 'administrador', name: 'Administrador', permissions: ALL.filter((c) => !['perfis.gerenciar', 'notificacoes.configurar', 'seguranca.configurar'].includes(c)) },
   { key: 'gestor', name: 'Gestor', permissions: [...V, 'previsao.visualizar', 'relatorios.visualizar', 'relatorios.dre', 'aprovacoes.aprovar', 'compras.aprovar',
-    'despesas.aprovar', 'documentos.visualizar', 'ia.usar', 'auditoria.visualizar', ...SOLICITAR] },
+    'despesas.aprovar', 'documentos.visualizar', 'ia.usar', 'auditoria.visualizar', 'associados.visualizar', ...SOLICITAR] },
   { key: 'financeiro', name: 'Financeiro', permissions: [...V, 'financeiro.titulos.criar', 'financeiro.titulos.editar', 'financeiro.titulos.baixar', 'financeiro.titulos.cancelar',
     'cadastros.gerenciar', 'cadastros.dados_sensiveis', 'relatorios.visualizar', 'relatorios.dre', 'conciliacao.importar', 'conciliacao.conciliar',
     'previsao.visualizar', 'recorrencias.gerenciar', 'compras.aprovar', 'compras.gerenciar', 'despesas.aprovar', 'despesas.pagar',
-    'documentos.visualizar', 'documentos.enviar', 'documentos.gerenciar', 'ia.usar', ...SOLICITAR] },
+    'documentos.visualizar', 'documentos.enviar', 'documentos.gerenciar', 'ia.usar', 'associados.visualizar', 'associados.gerenciar', ...SOLICITAR] },
   { key: 'aprovador', name: 'Aprovador', permissions: [...V, 'aprovacoes.aprovar', 'compras.aprovar', 'despesas.aprovar', 'documentos.visualizar'] },
   { key: 'lancamentos', name: 'Lançamentos', permissions: ['financeiro.titulos.visualizar', 'financeiro.titulos.criar', 'cadastros.visualizar', 'documentos.visualizar', ...SOLICITAR] },
   { key: 'colaborador', name: 'Colaborador', permissions: ['cadastros.visualizar', ...SOLICITAR] },
   { key: 'contador', name: 'Contador', permissions: [...V, 'relatorios.visualizar', 'relatorios.dre', 'exportacao.contabil', 'documentos.visualizar', 'previsao.visualizar', 'cadastros.dados_sensiveis'] },
-  { key: 'auditor', name: 'Auditor (somente leitura)', permissions: [...V, 'relatorios.visualizar', 'relatorios.dre', 'auditoria.visualizar', 'documentos.visualizar', 'previsao.visualizar'] },
+  { key: 'auditor', name: 'Auditor (somente leitura)', permissions: [...V, 'associados.visualizar', 'relatorios.visualizar', 'relatorios.dre', 'auditoria.visualizar', 'documentos.visualizar', 'previsao.visualizar'] },
 ];
 
 /**
  * Versões do catálogo: ao subir, organizações antigas ganham os perfis novos e, nos perfis de sistema que já existiam,
  * só as permissões NOVAS daquela versão (o que o cliente tirou de um perfil continua tirado).
  */
-export const PERM_VERSION = 2;
+export const PERM_VERSION = 3;
 const NEW_IN = { 2: ALL.filter((c) => !['financeiro.painel.visualizar', 'financeiro.titulos.visualizar', 'financeiro.titulos.criar', 'financeiro.titulos.editar',
   'financeiro.titulos.baixar', 'financeiro.titulos.cancelar', 'cadastros.visualizar', 'cadastros.gerenciar', 'contas.gerenciar', 'relatorios.visualizar', 'empresas.gerenciar',
-  'usuarios.gerenciar', 'perfis.gerenciar', 'auditoria.visualizar', 'configuracoes.gerenciar'].includes(c)) };
+  'usuarios.gerenciar', 'perfis.gerenciar', 'auditoria.visualizar', 'configuracoes.gerenciar', 'associados.visualizar', 'associados.gerenciar', 'associados.configurar'].includes(c)),
+  3: ['associados.visualizar', 'associados.gerenciar', 'associados.configurar'] };
 
 // grupo do DRE de cada categoria padrão (pelo nome do grupo-mãe)
 export const DRE_BY_PARENT = {
@@ -103,7 +109,7 @@ export const DRE_BY_NAME = { 'Taxas bancárias': 'despesas_financeiras', 'Outros
 
 export const DEFAULT_CATEGORIES = {
   receita: [
-    ['Vendas', ['Vendas de produtos', 'Prestação de serviços']],
+    ['Vendas', ['Vendas de produtos', 'Prestação de serviços', 'Mensalidades']],
     ['Outras receitas', ['Rendimentos', 'Reembolsos']],
   ],
   despesa: [

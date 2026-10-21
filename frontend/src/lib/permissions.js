@@ -40,6 +40,9 @@ export const P = {
   integrations: 'integracoes.gerenciar',
   notifyConfig: 'notificacoes.configurar',
   security: 'seguranca.configurar',
+  membersView: 'associados.visualizar',
+  membersManage: 'associados.gerenciar',
+  membersConfig: 'associados.configurar',
 };
 
 /** Quem enxerga a fila de aprovações (qualquer tipo). */

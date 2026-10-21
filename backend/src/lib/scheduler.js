@@ -5,6 +5,7 @@ import { today } from '../util.js';
 import { runRecurring } from './recurring.js';
 import { notifyPerm } from './notify.js';
 import { smtpConfig, sendMail } from '../routes/settings.js';
+import { runMembers, weeklyReport } from './members.js';
 
 const PAID = `coalesce((select sum(s.amount) from settlements s where s.title_id=t.id and s.reversed_at is null), 0)`;
 const brl = (n) => `R$ ${Number(n).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -13,7 +14,7 @@ const br = (d) => String(d).split('-').reverse().join('/');
 async function dueAlerts(db) {
   const day = today(); const soon = new Date(Date.parse(`${day}T12:00:00Z`) + 3 * 86400000).toISOString().slice(0, 10);
   const rows = await db.all(`select t.id, t.kind, t.description, t.due_date, t.company_id, round(t.amount - ${PAID},2) as open from titles t
-      where t.status in ('aberto','parcial') and t.due_date <= $2 and t.due_date >= $1::date - 1 and coalesce(t.approval_status,'aprovado') <> 'reprovado' limit 500`, [day, soon]);
+      where t.status in ('aberto','parcial') and t.member_id is null and t.due_date <= $2 and t.due_date >= $1::date - 1 and coalesce(t.approval_status,'aprovado') <> 'reprovado' limit 500`, [day, soon]);
   for (const t of rows) {
     const late = t.due_date < day;
     await notifyPerm(db, 'financeiro.titulos.baixar', { companyId: t.company_id, kind: late ? 'vencido' : 'vencimento',
@@ -41,10 +42,16 @@ async function digest(orgId) {
 }
 
 export async function tick() {
-  const orgs = (await q('select id from organizations')).rows;
+  const orgs = (await q('select id, name from organizations')).rows;
+  const now = new Date();
+  const hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }).format(now)) % 24;
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', weekday: 'short' }).format(now));
   for (const o of orgs) {
     try {
       await orgTx(o.id, async (db) => { await runRecurring(db); await dueAlerts(db); });
+      // associados: gera as mensalidades e manda os avisos (envio que falha fica registrado como falha e não derruba os outros)
+      await orgTx(o.id, (db) => runMembers(db, { hour }));
+      await orgTx(o.id, (db) => weeklyReport(db, { hour, weekday, orgName: o.name })).catch((e) => console.warn('[relatorio associados]', e.message));
       await digest(o.id);
     } catch (e) { console.error(`[rotina] organização ${o.id}:`, e.message); }
   }

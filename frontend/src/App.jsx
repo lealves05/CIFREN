@@ -23,6 +23,7 @@ const Overview = lazy(() => import('./pages/Overview'));
 const Approvals = lazy(() => import('./pages/Approvals'));
 const Reconciliation = lazy(() => import('./pages/Reconciliation'));
 const Recurring = lazy(() => import('./pages/Recurring'));
+const Members = lazy(() => import('./pages/Members'));
 const CashFlow = lazy(() => import('./pages/reports/CashFlow'));
 const Dre = lazy(() => import('./pages/reports/Dre'));
 const CostCenterReport = lazy(() => import('./pages/reports/CostCenterReport'));
@@ -95,6 +96,7 @@ export default function App() {
             <Route path="auditoria" element={<Allow perms={[P.auditView]}><Audit /></Allow>} />
             <Route path="aprovacoes" element={<Allow perms={APPROVER_PERMS} module="financeiro"><Approvals /></Allow>} />
             <Route path="conciliacao" element={<Allow perms={[P.reconImport, P.reconMatch]} module="conciliacao_bancaria"><Reconciliation /></Allow>} />
+            <Route path="associados" element={<Allow perms={[P.membersView, P.membersManage]} module="associados"><Members /></Allow>} />
             <Route path="recorrentes" element={<Allow perms={[P.recurringManage, P.forecastView]} module="recorrencias"><Recurring /></Allow>} />
             <Route path="relatorios/fluxo" element={<Allow perms={[P.reportsView, P.forecastView]} module="relatorios"><CashFlow /></Allow>} />
             <Route path="relatorios/dre" element={<Allow perms={[P.dre]} module="relatorios"><Dre /></Allow>} />

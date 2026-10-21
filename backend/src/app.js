@@ -19,6 +19,7 @@ import { purchases, expenses } from './routes/purchases.js';
 import { documents } from './routes/documents.js';
 import { ai, insights, notifications, security } from './routes/settings.js';
 import { integrations, lorlerApi } from './routes/integrations.js';
+import { members } from './routes/members.js';
 
 export const VERSION = process.env.CIFREN_VERSION || '2026.10-b';
 
@@ -84,6 +85,7 @@ export function createApp() {
   priv.use('/notifications', notifications);
   priv.use('/security', security);
   priv.use('/integrations', integrations);
+  priv.use('/members', members);
   app.use('/api', priv);
 
   app.use((_req, _res, next) => next(new HttpError(404, 'Rota não encontrada.')));

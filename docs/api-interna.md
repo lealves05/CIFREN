@@ -234,3 +234,13 @@ Baixar com `<a href>` (cookie vai junto).
 
 ## Painel (acréscimos)
 `GET /api/dashboard` ganha `pending_approvals: n`, `reconciliation_pending: n`, `documents_pending: n`, `recurring_missing: [{ name, due_date, estimated }]` (contas recorrentes que ainda não chegaram) e `insights: [até 3 do /api/insights]`.
+
+---
+# ASSOCIADOS E MENSALIDADES — `/api/members` (permissões `associados.visualizar`, `associados.gerenciar`, `associados.configurar`)
+- `GET /api/members?q=&situacao=atraso|em_dia&status=ativo|suspenso|encerrado|todos` → `{ items: [Associado + overdue{count,amount,oldest_due,days}, next_fee, last_payment], totals }`.
+- `POST /api/members` `{ company_id, name, email?, whatsapp?, document?, monthly_fee, due_day, start_month: "AAAA-MM", category_id?, notify_email, notify_whatsapp, notes? }` → gera as mensalidades (contas a receber `source: "mensalidade"`) do mês de início até o mês que vence nos próximos 15 dias.
+- `GET/PUT /api/members/:id` (`apply_to_open` ajusta valor/dia das em aberto sem pagamento) · `POST /:id/status {status, end_month?}` · `DELETE /:id` (só sem pagamento) · `POST /:id/generate`.
+- Cobrança: `POST /:id/remind {channel: email|whatsapp}` · `POST /:id/whatsapp-link` → `{ url: "https://wa.me/…?text=…", text }` · `POST /fees/:titleId/pay`.
+- Relatório: `GET /api/members/overdue` · `/overdue.csv` · `/overdue.xlsx` · `POST /overdue/send-report` (para o e-mail de quem pediu).
+- Avisos: `GET/PUT /api/members/settings` (dias depois do vencimento, lembrete antes, horário, textos com {nome} {valor} {descricao} {vencimento} {meses} {empresa} {pix}, chave Pix, WhatsApp oficial da Meta: ID do número, token cifrado, modelos aprovados; relatório semanal) · `POST /settings/test-whatsapp {to}`.
+- Rotina (a cada 10 min): gera mensalidades, manda avisos automáticos (uma vez por etapa, só no horário) e o relatório semanal por e-mail + sino.

@@ -29,6 +29,7 @@ export const FEATURES = {
   relatorios: { label: 'Relatórios e exportação', routes: ['/reports', '/export'] },
   whatsapp: { label: 'Agente do WhatsApp', routes: ['/whatsapp'] },
   integracoes_lorler: { label: 'Integração com ORBI, TORVEN, RUSTEN e APOLVEN', routes: ['/integrations'] },
+  associados: { label: 'Associados e mensalidades (cobrança por e-mail e WhatsApp)', routes: ['/members'] },
   compras: { label: 'Gestão de compras', routes: ['/purchases'] },
   despesas: { label: 'Despesas e reembolsos', routes: ['/expenses'] },
   agentes_ia: { label: 'Agentes de IA (pergunte ao financeiro, insights com IA)', routes: ['/ai'] },

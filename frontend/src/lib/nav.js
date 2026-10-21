@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, ArrowUpFromLine, ArrowDownToLine, FolderOpen, Building2, Users, ShieldCheck, UserRound,
   Wallet, ClipboardCheck, Landmark, Repeat, ShoppingCart, Receipt, FileText, BarChart3, LineChart, Table2,
-  Target, AlarmClock, Download, Sparkles, Settings, Plug, Bot, Bell, Lock, Scale, Map as MapIcon, ShoppingBag,
+  Target, AlarmClock, Download, Sparkles, Settings, Plug, Bot, Bell, Lock, Scale, Map as MapIcon, ShoppingBag, HandCoins,
 } from 'lucide-react';
 import { P, APPROVER_PERMS } from './permissions';
 
@@ -18,6 +18,7 @@ export const NAV_GROUPS = [
       { to: '/receber', label: 'Contas a receber', short: 'Receber', icon: ArrowDownToLine, perms: [P.titlesView], module: 'financeiro' },
       { to: '/aprovacoes', label: 'Aprovações', short: 'Aprovações', icon: ClipboardCheck, perms: APPROVER_PERMS, badge: 'approvals', module: 'financeiro' },
       { to: '/conciliacao', label: 'Conciliação', short: 'Conciliação', icon: Landmark, perms: [P.reconImport, P.reconMatch], module: 'conciliacao_bancaria' },
+      { to: '/associados', label: 'Associados e mensalidades', short: 'Associados', icon: HandCoins, perms: [P.membersView, P.membersManage], module: 'associados' },
       { to: '/recorrentes', label: 'Recorrentes e previsão', short: 'Recorrentes', icon: Repeat, perms: [P.recurringManage, P.forecastView], module: 'recorrencias' },
     ],
   },
