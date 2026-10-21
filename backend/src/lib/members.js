@@ -61,6 +61,35 @@ export async function feeCategory(db) {
   const parent = await db.one("select id from categories where name='Vendas' and type='receita' and parent_id is null limit 1");
   return (await db.one("insert into categories (org_id, name, type, parent_id, dre_group) values ($1,'Mensalidades','receita',$2,'receita_bruta') returning id", [db.orgId, parent?.id || null])).id;
 }
+// ---------------- tabela de valores ----------------
+/** Tabela de valores (mais antigo primeiro). */
+export const feeTable = (db) => db.all('select id, effective_month, amount, notes, created_by_name, created_at, updated_at from member_fees order by effective_month');
+/** Valor da tabela que vale num mês (null se ainda não há valor para esse mês). */
+export function tableFeeAt(table, month) {
+  let v = null;
+  for (const f of table) { if (String(f.effective_month).slice(0, 10) <= month) v = Number(f.amount); else break; }
+  return v;
+}
+/** Valor de um associado num mês: o valor especial do cadastro, se houver; senão o da tabela. */
+export const feeFor = (m, table, month) => (m.monthly_fee != null ? Number(m.monthly_fee) : tableFeeAt(table, month));
+export const nextMonth = () => addMonths(monthStart(today()), 1);
+/**
+ * Recalcula as mensalidades AINDA EM ABERTO e sem pagamento a partir de um mês (as pagas e as de meses anteriores não mudam).
+ * memberId = só de um associado.
+ */
+export async function recalcOpen(db, fromMonth, memberId = null) {
+  const table = await feeTable(db);
+  const rows = await db.all(`select t.id, t.amount, t.competence_date, m.monthly_fee from titles t join members m on m.id=t.member_id
+      where t.source='mensalidade' and t.status='aberto' and t.competence_date >= $1 and ($2::uuid is null or t.member_id=$2)
+        and not exists(select 1 from settlements s where s.title_id=t.id and s.reversed_at is null)`, [fromMonth, memberId]);
+  let n = 0;
+  for (const t of rows) {
+    const v = feeFor(t, table, String(t.competence_date).slice(0, 10));
+    if (v && Number(t.amount) !== v) { await db.query('update titles set amount=$2, updated_at=now(), version=version+1 where id=$1', [t.id, v]); n++; }
+  }
+  return n;
+}
+
 /** Gera as mensalidades que faltam de um associado: do mês de início até o mês que vence nos próximos 15 dias (no máximo 24 meses para trás). */
 export async function generateFor(db, m, userId = null) {
   if (m.status !== 'ativo') return 0;
@@ -69,6 +98,7 @@ export async function generateFor(db, m, userId = null) {
   const limitBack = addMonths(monthStart(day), -24);
   if (first < limitBack) first = limitBack;
   const horizon = monthStart(addDays(day, 15));
+  const table = await feeTable(db);
   let n = 0;
   for (let k = 0; ; k++) {
     const month = addMonths(first, k);
@@ -76,10 +106,12 @@ export async function generateFor(db, m, userId = null) {
     if (m.end_month && month > monthStart(m.end_month)) break;
     const due = dueOf(month, m.due_day);
     if (month === horizon && due > addDays(day, 15)) break;
+    const amount = feeFor(m, table, month);
+    if (!amount) continue; // sem valor para esse mês: cadastre na tabela de valores
     const r = await db.query(`insert into titles (org_id, company_id, kind, description, counterparty_id, category_id, competence_date, due_date, amount, source, external_id, member_id, created_by, notes)
         values ($1,$2,'receber',$3,$4,$5,$6,$7,$8,'mensalidade',$9,$10,$11,'Mensalidade gerada automaticamente pelo cadastro do associado.')
         on conflict (org_id, source, external_id) where external_id is not null do nothing`,
-    [db.orgId, m.company_id, `Mensalidade ${mm(month)} — ${m.name}`.slice(0, 200), m.counterparty_id, m.category_id, month, due, m.monthly_fee, `m:${m.id}:${ym(month)}`, m.id, userId]);
+    [db.orgId, m.company_id, `Mensalidade ${mm(month)} — ${m.name}`.slice(0, 200), m.counterparty_id, m.category_id, month, due, amount, `m:${m.id}:${ym(month)}`, m.id, userId]);
     n += r.rowCount;
   }
   return n;
@@ -204,8 +236,9 @@ export async function overdueReport(db, scope = null) {
   const items = rows.map((r) => ({ member: { id: r.id, number: Number(r.number), name: r.name, email: r.email, whatsapp: r.whatsapp, status: r.status, company: r.company },
     count: r.n, amount: Number(r.amount), oldest_due: r.oldest_due, days: Math.round((Date.parse(day) - Date.parse(r.oldest_due)) / 86400000), months: r.months,
     last_reminder: r.last_reminder, has_contact: !!(r.email || normPhone(r.whatsapp)) }));
-  const tot = await db.one(`select count(*)::int as members, coalesce(sum(case when status='ativo' then monthly_fee else 0 end),0) as monthly
-      from members where status <> 'encerrado' and ($1::uuid[] is null or company_id = any($1::uuid[]))`, [scope]);
+  const cur = (await db.one('select amount from member_fees where effective_month <= $1 order by effective_month desc limit 1', [monthStart(day)]))?.amount || 0;
+  const tot = await db.one(`select count(*)::int as members, coalesce(sum(case when status='ativo' then coalesce(monthly_fee, $2) else 0 end),0) as monthly
+      from members where status <> 'encerrado' and ($1::uuid[] is null or company_id = any($1::uuid[]))`, [scope, cur]);
   return { as_of: day, items, totals: { members_overdue: items.length, fees_overdue: items.reduce((a, x) => a + x.count, 0), amount: round2(items.reduce((a, x) => a + x.amount, 0)),
     active_members: tot.members, monthly_expected: Number(tot.monthly) } };
 }

@@ -244,3 +244,6 @@ Baixar com `<a href>` (cookie vai junto).
 - Relatório: `GET /api/members/overdue` · `/overdue.csv` · `/overdue.xlsx` · `POST /overdue/send-report` (para o e-mail de quem pediu).
 - Avisos: `GET/PUT /api/members/settings` (dias depois do vencimento, lembrete antes, horário, textos com {nome} {valor} {descricao} {vencimento} {meses} {empresa} {pix}, chave Pix, WhatsApp oficial da Meta: ID do número, token cifrado, modelos aprovados; relatório semanal) · `POST /settings/test-whatsapp {to}`.
 - Rotina (a cada 10 min): gera mensalidades, manda avisos automáticos (uma vez por etapa, só no horário) e o relatório semanal por e-mail + sino.
+- **Tabela de valores da mensalidade** (`/api/members/fees`): `GET` → `{ items (mais novo primeiro): [{ id, effective_month, until_month, amount, notes, current, future, created_by_name }], current, next_month }`;
+  `POST { amount, effective_month?, notes? }` (novo valor vale a partir do próximo mês; o 1º valor pode valer desde qualquer mês) · `PUT /:fid` (correção: recalcula as em aberto sem pagamento desde o mês afetado) · `DELETE /:fid`.
+  O associado segue a tabela; `monthly_fee` no cadastro virou valor especial opcional (`custom_fee`), e a mudança dele vale a partir do próximo mês. Meses anteriores e mensalidades pagas nunca mudam.

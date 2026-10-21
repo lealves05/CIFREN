@@ -11,7 +11,7 @@ import { smtpConfig } from './settings.js';
 import { maskEmail, maskPhone, maskDoc } from './cadastros.js';
 import {
   PAID_T, normPhone, fmtPhone, feeCategory, generateFor, memberSettings, saveMemberSettings, waReady, sendReminder, openFeesOf, messageVars, render, waLink,
-  overdueReport, weeklyReport, testWhatsApp, DEFAULT_SETTINGS, dueOf,
+  overdueReport, weeklyReport, testWhatsApp, DEFAULT_SETTINGS, dueOf, feeTable, tableFeeAt, recalcOpen, nextMonth,
 } from '../lib/members.js';
 
 export const members = Router();
@@ -27,7 +27,8 @@ const memberSchema = z.object({
   document: optText(20),
   email: optText(200).refine((v) => !v || /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v), 'e-mail inválido'),
   whatsapp: optText(30).refine((v) => !v || normPhone(v), 'WhatsApp inválido (use DDD + número)'),
-  monthly_fee: z.coerce.number().positive('informe o valor da mensalidade').max(1e9).transform(round2),
+  // valor especial só deste associado (vazio = segue a tabela de valores da mensalidade)
+  monthly_fee: z.preprocess((v) => (v === '' || v === null ? null : v), z.coerce.number().positive('valor inválido').max(1e9).transform(round2).nullable()).optional(),
   due_day: z.coerce.number().int().min(1).max(31).default(10),
   start_month: monthStr,
   category_id: z.string().refine(isUuid).optional().nullable(),
@@ -36,12 +37,13 @@ const memberSchema = z.object({
 });
 
 const sensitive = (req) => can(req, 'cadastros.dados_sensiveis') || can(req, 'associados.gerenciar');
-function shape(req, m, extra = {}) {
+function shape(req, m, extra = {}, table = null) {
   const full = sensitive(req);
   return { id: m.id, number: Number(m.number), company: m.company || { id: m.company_id }, name: m.name,
     document: full ? m.document : m.document && maskDoc(m.document), email: full ? m.email : m.email && maskEmail(m.email),
     whatsapp: full ? m.whatsapp : m.whatsapp && maskPhone(m.whatsapp), whatsapp_display: full ? fmtPhone(m.whatsapp) : m.whatsapp && maskPhone(m.whatsapp),
-    monthly_fee: Number(m.monthly_fee), due_day: m.due_day, start_month: String(m.start_month).slice(0, 7), end_month: m.end_month ? String(m.end_month).slice(0, 7) : null,
+    custom_fee: m.monthly_fee != null ? Number(m.monthly_fee) : null,
+    monthly_fee: m.monthly_fee != null ? Number(m.monthly_fee) : table ? tableFeeAt(table, `${today().slice(0, 7)}-01`) : null, due_day: m.due_day, start_month: String(m.start_month).slice(0, 7), end_month: m.end_month ? String(m.end_month).slice(0, 7) : null,
     status: m.status, category: m.category || (m.category_id ? { id: m.category_id } : null), notify_email: m.notify_email, notify_whatsapp: m.notify_whatsapp, notes: m.notes,
     created_at: m.created_at, masked: !full, ...extra };
 }
@@ -61,6 +63,7 @@ members.get('/', need('associados.visualizar', 'associados.gerenciar'), async (r
   if (req.query.situacao === 'atraso') w.push(`exists(select 1 from titles t where t.member_id=m.id and t.status in ('aberto','parcial') and t.due_date < $2)`);
   if (req.query.situacao === 'em_dia') w.push(`not exists(select 1 from titles t where t.member_id=m.id and t.status in ('aberto','parcial') and t.due_date < $2)`);
   const items = await orgTx(req.orgId, async (db) => {
+    const table = await feeTable(db);
     const rows = await db.all(`select m.*, json_build_object('id', co.id, 'name', co.name) as company,
         case when c.id is null then null else json_build_object('id', c.id, 'name', c.name) end as category,
         (select json_build_object('count', count(*), 'amount', coalesce(round(sum(t.amount - ${PAID_T}),2),0), 'oldest_due', min(t.due_date))
@@ -71,10 +74,10 @@ members.get('/', need('associados.visualizar', 'associados.gerenciar'), async (r
       from members m join companies co on co.id=m.company_id left join categories c on c.id=m.category_id
       where ${w.join(' and ')} order by lower(m.name) limit 2000`, p);
     return rows.map((m) => shape(req, m, { overdue: { count: Number(m.overdue.count), amount: Number(m.overdue.amount), oldest_due: m.overdue.oldest_due,
-      days: m.overdue.oldest_due ? Math.round((Date.parse(day) - Date.parse(m.overdue.oldest_due)) / 86400000) : 0 }, next_fee: m.next_fee, last_payment: m.last_payment }));
+      days: m.overdue.oldest_due ? Math.round((Date.parse(day) - Date.parse(m.overdue.oldest_due)) / 86400000) : 0 }, next_fee: m.next_fee, last_payment: m.last_payment }, table));
   });
   const totals = { members: items.length, active: items.filter((x) => x.status === 'ativo').length, overdue_members: items.filter((x) => x.overdue.count > 0).length,
-    overdue_amount: round2(items.reduce((a, x) => a + x.overdue.amount, 0)), monthly_expected: round2(items.filter((x) => x.status === 'ativo').reduce((a, x) => a + x.monthly_fee, 0)) };
+    overdue_amount: round2(items.reduce((a, x) => a + x.overdue.amount, 0)), monthly_expected: round2(items.filter((x) => x.status === 'ativo').reduce((a, x) => a + (x.monthly_fee || 0), 0)) };
   res.json({ items, totals });
 });
 
@@ -162,6 +165,70 @@ members.post('/overdue/send-report', need('associados.visualizar'), async (req, 
   res.json({ ok: true, to: req.user.email });
 });
 
+// ---------------- tabela de valores da mensalidade ----------------
+const feeOut = (table) => {
+  const cur = `${today().slice(0, 7)}-01`;
+  const items = table.map((f, i) => ({ id: f.id, effective_month: String(f.effective_month).slice(0, 7), amount: Number(f.amount), notes: f.notes,
+    until_month: table[i + 1] ? String(table[i + 1].effective_month).slice(0, 7) : null, created_by_name: f.created_by_name, created_at: f.created_at, updated_at: f.updated_at,
+    current: String(f.effective_month).slice(0, 10) <= cur && (!table[i + 1] || String(table[i + 1].effective_month).slice(0, 10) > cur),
+    future: String(f.effective_month).slice(0, 10) > cur }));
+  const current = tableFeeAt(table, cur);
+  return { items: items.reverse(), current, next_month: nextMonth().slice(0, 7) };
+};
+members.get('/fees', need('associados.visualizar', 'associados.gerenciar'), async (req, res) => {
+  res.json(await orgTx(req.orgId, async (db) => feeOut(await feeTable(db))));
+});
+const feeSchema = z.object({ amount: z.coerce.number().positive('informe o valor').max(1e9).transform(round2), effective_month: monthStr.optional(), notes: optText(200) });
+/** Novo valor: vale a partir do próximo mês (ou de um mês futuro escolhido); os meses anteriores não mudam. O 1º valor pode valer desde qualquer mês. */
+members.post('/fees', need('associados.gerenciar'), async (req, res) => {
+  const d = parse(feeSchema, req.body);
+  const out = await orgTx(req.orgId, async (db) => {
+    const table = await feeTable(db);
+    const next = nextMonth();
+    const month = d.effective_month || (table.length ? next : `${today().slice(0, 7)}-01`);
+    if (table.length && month < next) throw new HttpError(400, `O novo valor vale a partir do próximo mês (${next.slice(5, 7)}/${next.slice(0, 4)}). Para corrigir um valor já lançado, edite-o na lista.`);
+    if (table.some((f) => String(f.effective_month).slice(0, 10) === month)) throw new HttpError(409, 'Já existe um valor para esse mês. Edite-o na lista.');
+    await db.query('insert into member_fees (org_id, effective_month, amount, notes, created_by, created_by_name) values ($1,$2,$3,$4,$5,$6)', [req.orgId, month, d.amount, d.notes, req.user.id, req.user.name]);
+    const n = await recalcOpen(db, month);
+    // primeiro valor: gera as mensalidades de quem estava esperando a tabela
+    let generated = 0;
+    if (!table.length) for (const m of await db.all("select * from members where status='ativo'")) generated += await generateFor(db, m, req.user.id);
+    await audit(db, { actor: actor(req), req, action: 'mensalidade.valor', entity: 'member_fees', summary: `Mensalidade ${brl(d.amount)} a partir de ${month.slice(5, 7)}/${month.slice(0, 4)}${n ? ` (${n} mensalidade(s) em aberto ajustada(s))` : ''}` });
+    return { ...feeOut(await feeTable(db)), recalculated: n, generated };
+  });
+  res.status(201).json(out);
+});
+/** Corrigir um valor já lançado (valor, mês ou observação): recalcula as mensalidades em aberto e sem pagamento desde o mês afetado. */
+members.put('/fees/:fid', need('associados.gerenciar'), async (req, res) => {
+  const d = parse(feeSchema.partial(), req.body);
+  const out = await orgTx(req.orgId, async (db) => {
+    const f = await db.one('select * from member_fees where id=$1 for update', [uuidParam(req.params.fid)]);
+    if (!f) throw notFound('Valor não encontrado.');
+    const month = d.effective_month || String(f.effective_month).slice(0, 10);
+    if (month !== String(f.effective_month).slice(0, 10) && await db.one('select 1 from member_fees where effective_month=$1 and id<>$2', [month, f.id])) throw new HttpError(409, 'Já existe um valor para esse mês.');
+    await db.query('update member_fees set amount=coalesce($2,amount), effective_month=$3, notes=case when $4::boolean then $5 else notes end, updated_at=now() where id=$1',
+      [f.id, d.amount ?? null, month, 'notes' in (req.body || {}), d.notes ?? null]);
+    const from = [month, String(f.effective_month).slice(0, 10)].sort()[0];
+    const n = await recalcOpen(db, from);
+    await audit(db, { actor: actor(req), req, action: 'mensalidade.valor_corrigido', entity: 'member_fees', entityId: f.id,
+      summary: `Valor de ${String(f.effective_month).slice(0, 7)}: ${brl(f.amount)} → ${brl(d.amount ?? f.amount)} a partir de ${month.slice(0, 7)}${n ? ` (${n} em aberto ajustada(s))` : ''}` });
+    return { ...feeOut(await feeTable(db)), recalculated: n };
+  });
+  res.json(out);
+});
+members.delete('/fees/:fid', need('associados.gerenciar'), async (req, res) => {
+  const out = await orgTx(req.orgId, async (db) => {
+    const f = await db.one('select * from member_fees where id=$1 for update', [uuidParam(req.params.fid)]);
+    if (!f) throw notFound('Valor não encontrado.');
+    if ((await db.one('select count(*)::int as n from member_fees')).n === 1) throw new HttpError(409, 'Este é o único valor da tabela. Edite em vez de excluir.');
+    await db.query('delete from member_fees where id=$1', [f.id]);
+    const n = await recalcOpen(db, String(f.effective_month).slice(0, 10));
+    await audit(db, { actor: actor(req), req, action: 'mensalidade.valor_excluido', entity: 'member_fees', entityId: f.id, summary: `Excluído o valor ${brl(f.amount)} de ${String(f.effective_month).slice(0, 7)}` });
+    return { ...feeOut(await feeTable(db)), recalculated: n };
+  });
+  res.json(out);
+});
+
 // ---------------- cadastro ----------------
 members.post('/', need('associados.gerenciar'), async (req, res) => {
   const d = parse(memberSchema, req.body);
@@ -169,15 +236,17 @@ members.post('/', need('associados.gerenciar'), async (req, res) => {
   const out = await orgTx(req.orgId, async (db) => {
     if (!(await db.one('select 1 from companies where id=$1 and active', [d.company_id]))) throw new HttpError(400, 'Empresa inválida.');
     if (d.category_id) { const c = await db.one('select type from categories where id=$1', [d.category_id]); if (!c || c.type !== 'receita') throw new HttpError(400, 'Use uma categoria de receita.'); }
+    const table = await feeTable(db);
+    if (d.monthly_fee == null && !table.length) throw new HttpError(409, 'Cadastre primeiro o valor da mensalidade (aba "Valores da mensalidade"). Ele vale para todos os associados.', { code: 'FEE_NOT_SET' });
     const cat = d.category_id || await feeCategory(db);
     const cp = await db.one("insert into counterparties (org_id, kind, name, document, email, phone, notes) values ($1,'cliente',$2,$3,$4,$5,'Associado (mensalidades)') returning id",
       [req.orgId, d.name, d.document, d.email, d.whatsapp ? fmtPhone(normPhone(d.whatsapp)) : null]);
     const m = await db.one(`insert into members (org_id, company_id, counterparty_id, name, document, email, whatsapp, monthly_fee, due_day, start_month, category_id, notify_email, notify_whatsapp, notes, created_by)
         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning *`,
-    [req.orgId, d.company_id, cp.id, d.name, d.document, d.email, d.whatsapp ? normPhone(d.whatsapp) : null, d.monthly_fee, d.due_day, d.start_month, cat, d.notify_email, d.notify_whatsapp, d.notes, req.user.id]);
+    [req.orgId, d.company_id, cp.id, d.name, d.document, d.email, d.whatsapp ? normPhone(d.whatsapp) : null, d.monthly_fee ?? null, d.due_day, d.start_month, cat, d.notify_email, d.notify_whatsapp, d.notes, req.user.id]);
     const n = await generateFor(db, m, req.user.id);
-    await audit(db, { actor: actor(req), req, action: 'associado.criado', entity: 'member', entityId: m.id, summary: `${d.name}: mensalidade ${brl(d.monthly_fee)} todo dia ${d.due_day} (${n} mensalidade(s) gerada(s))` });
-    return shape(req, m, { generated: n });
+    await audit(db, { actor: actor(req), req, action: 'associado.criado', entity: 'member', entityId: m.id, summary: `${d.name}: mensalidade ${d.monthly_fee != null ? `especial ${brl(d.monthly_fee)}` : 'da tabela'} todo dia ${d.due_day} (${n} mensalidade(s) gerada(s))` });
+    return shape(req, m, { generated: n }, table);
   });
   res.status(201).json(out);
 });
@@ -192,11 +261,12 @@ members.get('/:id', need('associados.visualizar', 'associados.gerenciar'), async
       from titles t where t.member_id=$1 order by t.due_date desc limit 120`, [m.id]);
     const day = today();
     const reminders = await db.all('select id, title_id, channel, kind, step, status, error, sent_by_name, sent_at from member_reminders where member_id=$1 order by sent_at desc limit 60', [m.id]);
+    const table = await feeTable(db);
     return shape(req, { ...m, company: co, category: cat }, {
       fees: fees.map((t) => ({ id: t.id, month: String(t.competence_date || t.due_date).slice(0, 7), due_date: t.due_date, amount: Number(t.amount), paid: Number(t.paid), paid_at: t.paid_at,
         status: t.status, overdue: ['aberto', 'parcial'].includes(t.status) && t.due_date < day, open: round2(Number(t.amount) - Number(t.paid)) })),
       reminders,
-    });
+    }, table);
   });
   res.json(out);
 });
@@ -216,22 +286,24 @@ members.put('/:id', need('associados.gerenciar'), async (req, res) => {
     if (['name', 'document', 'email', 'whatsapp'].some(has) && r.counterparty_id) {
       await db.query('update counterparties set name=$2, document=$3, email=$4, phone=$5 where id=$1', [r.counterparty_id, r.name, r.document, r.email, r.whatsapp ? fmtPhone(r.whatsapp) : null]);
     }
-    // mensalidades em aberto e sem pagamento: novo valor, novo dia de vencimento e nome (se pedido)
+    // valor especial mudou (ou voltou para a tabela): vale a partir do próximo mês; os meses anteriores não mudam
     let changed = 0;
-    if (d.apply_to_open && (has('monthly_fee') || has('due_day') || has('name'))) {
+    if (has('monthly_fee') && (m.monthly_fee == null ? null : Number(m.monthly_fee)) !== d.monthly_fee) changed += await recalcOpen(db, nextMonth(), m.id);
+    // dia do vencimento e nome: nas mensalidades em aberto e sem pagamento (se pedido)
+    if (d.apply_to_open && (has('due_day') || has('name'))) {
       const open = await db.all(`select t.id, t.competence_date from titles t where t.member_id=$1 and t.status='aberto'
           and not exists(select 1 from settlements s where s.title_id=t.id and s.reversed_at is null)`, [m.id]);
       for (const t of open) {
         const month = String(t.competence_date).slice(0, 10);
-        await db.query('update titles set amount=$2, due_date=$3, description=$4, updated_at=now(), version=version+1 where id=$1',
-          [t.id, r.monthly_fee, dueOf(month, r.due_day), `Mensalidade ${month.slice(5, 7)}/${month.slice(0, 4)} — ${r.name}`.slice(0, 200)]);
-        changed++;
+        await db.query('update titles set due_date=$2, description=$3, updated_at=now(), version=version+1 where id=$1',
+          [t.id, dueOf(month, r.due_day), `Mensalidade ${month.slice(5, 7)}/${month.slice(0, 4)} — ${r.name}`.slice(0, 200)]);
       }
+      changed += open.length;
     }
     if (has('start_month') || has('due_day')) await generateFor(db, r, req.user.id);
     await audit(db, { actor: actor(req), req, action: 'associado.alterado', entity: 'member', entityId: m.id, summary: `${r.name}${changed ? ` (${changed} mensalidade(s) em aberto ajustada(s))` : ''}`,
       data: { antes: Object.fromEntries(keys.map((k) => [k, m[k]])), depois: Object.fromEntries(keys.map((k) => [k, d[k]])) } });
-    return shape(req, r, { open_updated: changed });
+    return shape(req, r, { open_updated: changed }, await feeTable(db));
   });
   res.json(out);
 });

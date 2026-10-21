@@ -120,9 +120,11 @@ test('pagamento da mensalidade tira o associado do atraso', async () => {
 
 test('alterar valor (aplicando nas em aberto), encerrar, excluir cadastro errado e isolamento', async () => {
   const u = await A.put(`/api/members/${ctx.maria}`, { monthly_fee: 95, apply_to_open: true, whatsapp: '19 98888-7777' });
-  assert.equal(u.status, 200, JSON.stringify(u.data)); assert.ok(u.data.open_updated >= 1);
+  assert.equal(u.status, 200, JSON.stringify(u.data));
   const fees = (await A.get(`/api/members/${ctx.maria}`)).data.fees;
-  assert.ok(fees.filter((f) => f.status === 'aberto').every((f) => f.amount === 95));
+  // novo valor só a partir do próximo mês: o mês atual continua 80
+  assert.ok(fees.filter((f) => f.month <= month(0)).every((f) => f.amount === 80));
+  assert.ok(fees.filter((f) => f.month > month(0)).every((f) => f.amount === 95));
   assert.ok(fees.every((f) => /-(28|29|30|31)$/.test(f.due_date)), 'dia 31 vira o último dia do mês');
   assert.equal((await A.del(`/api/members/${ctx.joao}`)).status, 409, 'já tem pagamento: encerrar em vez de excluir');
   const enc = await A.post(`/api/members/${ctx.joao}/status`, { status: 'encerrado' });
@@ -137,4 +139,50 @@ test('alterar valor (aplicando nas em aberto), encerrar, excluir cadastro errado
   await U.post('/api/auth/login', { email: 'col@as.com', password: inv.data.temporary_password });
   await U.put('/api/auth/password', { current_password: inv.data.temporary_password, new_password: PASS });
   assert.equal((await U.get('/api/members')).status, 403);
+});
+
+test('tabela de valores: um valor para todos, novo valor só a partir do próximo mês, histórico e correção', async () => {
+  const C = await signup(env.base, 'as3');
+  const company = (await C.get('/api/auth/me')).data.companies[0].id;
+  // sem tabela e sem valor especial: pede o valor primeiro
+  const r0 = await C.post('/api/members', { company_id: company, name: 'Ana', start_month: month(-1), due_day: 10 });
+  assert.equal(r0.status, 409); assert.equal(r0.data.code, 'FEE_NOT_SET');
+  const f1 = await C.post('/api/members/fees', { amount: 100, effective_month: month(-1) });
+  assert.equal(f1.status, 201, JSON.stringify(f1.data)); assert.equal(f1.data.current, 100);
+  const ana = (await C.post('/api/members', { company_id: company, name: 'Ana', start_month: month(-1), due_day: 1 })).data;
+  const bia = (await C.post('/api/members', { company_id: company, name: 'Bia', start_month: month(-1), due_day: 1, monthly_fee: 70 })).data;
+  assert.equal(ana.monthly_fee, 100); assert.equal(ana.custom_fee, null); assert.equal(bia.monthly_fee, 70);
+  // novo valor não pode valer para o mês atual nem para trás
+  assert.equal((await C.post('/api/members/fees', { amount: 130, effective_month: month(0) })).status, 400);
+  const f2 = await C.post('/api/members/fees', { amount: 130 });
+  assert.equal(f2.status, 201); assert.equal(f2.data.items[0].effective_month, month(1)); assert.equal(f2.data.items[0].future, true);
+  assert.equal(f2.data.items[1].until_month, month(1)); assert.equal(f2.data.current, 100);
+  // gera o próximo mês "na mão" (a rotina gera 15 dias antes) e confere: meses anteriores mantêm 100; o próximo vem com 130; o especial não muda
+  const { orgTx } = await import('../src/db.js'); const { generateFor } = await import('../src/lib/members.js');
+  const org = (await C.get('/api/auth/me')).data.org.id;
+  await orgTx(org, async (db) => {
+    const m = await db.one('select * from members where id=$1', [ana.id]);
+    await db.query(`insert into titles (org_id, company_id, kind, description, competence_date, due_date, amount, source, external_id, member_id)
+      values ($1,$2,'receber','Mensalidade teste',$3,$3,100,'mensalidade',$4,$5) on conflict (org_id, source, external_id) where external_id is not null do nothing`, [org, m.company_id, `${month(1)}-01`, `m:${m.id}:${month(1)}`, m.id]);
+    await generateFor(db, m);
+  });
+  const { recalcOpen } = await import('../src/lib/members.js');
+  await orgTx(org, (db) => recalcOpen(db, `${month(1)}-01`));
+  let fees = (await C.get(`/api/members/${ana.id}`)).data.fees;
+  const byMonth = Object.fromEntries(fees.map((f) => [f.month, f.amount]));
+  assert.equal(byMonth[month(-1)], 100); assert.equal(byMonth[month(0)], 100); assert.equal(byMonth[month(1)], 130);
+  assert.ok((await C.get(`/api/members/${bia.id}`)).data.fees.every((f) => f.amount === 70));
+  // correção do valor lançado: 130 → 125, recalcula a mensalidade em aberto
+  const fix = await C.put(`/api/members/fees/${f2.data.items[0].id}`, { amount: 125 });
+  assert.equal(fix.status, 200); assert.equal(fix.data.recalculated, 1);
+  fees = (await C.get(`/api/members/${ana.id}`)).data.fees;
+  assert.equal(fees.find((f) => f.month === month(1)).amount, 125);
+  // excluir o valor futuro: volta para 100
+  assert.equal((await C.del(`/api/members/fees/${f2.data.items[0].id}`)).status, 200);
+  assert.equal((await C.get(`/api/members/${ana.id}`)).data.fees.find((f) => f.month === month(1)).amount, 100);
+  assert.equal((await C.del(`/api/members/fees/${f1.data.items[0].id}`)).status, 409, 'o único valor não sai');
+  // tirar o valor especial: a Bia passa a seguir a tabela a partir do próximo mês
+  const u = await C.put(`/api/members/${bia.id}`, { monthly_fee: null });
+  assert.equal(u.status, 200, JSON.stringify(u.data)); assert.equal(u.data.custom_fee, null); assert.equal(u.data.monthly_fee, 100);
+  assert.equal((await C.get('/api/members/fees')).data.items.length, 1);
 });

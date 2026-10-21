@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Users2, Plus, Search, Pencil, Eye, Mail, MessageCircle, Pause, Play, Square, Trash2, Download, Send, AlarmClock, Settings2, CheckCircle2, ExternalLink,
+  Users2, Plus, Search, Pencil, Eye, Mail, MessageCircle, Pause, Play, Square, Trash2, Download, Send, AlarmClock, Settings2, CheckCircle2, ExternalLink, BadgeDollarSign, History,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useUI } from '../context/UIContext';
@@ -34,7 +34,7 @@ function situation(m) {
 }
 
 // ---------------- formulário ----------------
-function MemberForm({ open, onClose, item, onSaved }) {
+function MemberForm({ open, onClose, item, onSaved, feeInfo, onGoFees }) {
   const { companies, companyId } = useAuth();
   const { toast } = useUI();
   const [f, setF] = useState({});
@@ -46,10 +46,10 @@ function MemberForm({ open, onClose, item, onSaved }) {
     setError('');
     loadRefs(['categories']).then((r) => setCats(r.categories));
     setF(item ? {
-      name: item.name, document: item.document || '', email: item.email || '', whatsapp: item.whatsapp_display || '', monthly_fee: item.monthly_fee, due_day: item.due_day,
+      name: item.name, document: item.document || '', email: item.email || '', whatsapp: item.whatsapp_display || '', special: item.custom_fee != null, monthly_fee: item.custom_fee, due_day: item.due_day,
       start_month: item.start_month, company_id: item.company?.id, category_id: item.category?.id || null, notify_email: item.notify_email, notify_whatsapp: item.notify_whatsapp,
       notes: item.notes || '', apply_to_open: true,
-    } : { name: '', document: '', email: '', whatsapp: '', monthly_fee: null, due_day: 10, start_month: today().slice(0, 7), company_id: companyId || companies[0]?.id,
+    } : { name: '', document: '', email: '', whatsapp: '', special: false, monthly_fee: null, due_day: 10, start_month: today().slice(0, 7), company_id: companyId || companies[0]?.id,
       category_id: null, notify_email: true, notify_whatsapp: true, notes: '' });
   }, [open, item]); // eslint-disable-line react-hooks/exhaustive-deps
   const set = (k) => (v) => setF((x) => ({ ...x, [k]: v && v.target ? v.target.value : v }));
@@ -57,15 +57,16 @@ function MemberForm({ open, onClose, item, onSaved }) {
   const submit = async () => {
     setError('');
     if (!f.name?.trim()) return setError('Informe o nome do associado.');
-    if (!(f.monthly_fee > 0)) return setError('Informe o valor da mensalidade.');
-    const body = { name: f.name.trim(), document: f.document.trim() || null, email: f.email.trim() || null, whatsapp: f.whatsapp.trim() || null, monthly_fee: f.monthly_fee,
+    if (f.special && !(f.monthly_fee > 0)) return setError('Informe o valor especial ou desligue a opção.');
+    if (!f.special && !feeInfo?.current && !feeInfo?.items?.length) return setError('Cadastre primeiro o valor da mensalidade na aba "Valores da mensalidade".');
+    const body = { name: f.name.trim(), document: f.document.trim() || null, email: f.email.trim() || null, whatsapp: f.whatsapp.trim() || null, monthly_fee: f.special ? f.monthly_fee : null,
       due_day: Number(f.due_day), start_month: f.start_month, company_id: f.company_id, category_id: f.category_id || null, notify_email: f.notify_email, notify_whatsapp: f.notify_whatsapp,
       notes: f.notes.trim() || null };
     setSaving(true);
     try {
       if (item) {
         const r = await api.put(`/members/${item.id}`, { ...body, apply_to_open: f.apply_to_open });
-        toast(r.open_updated ? `Associado salvo. ${r.open_updated} mensalidade(s) em aberto ajustada(s).` : 'Associado salvo.');
+        toast(r.open_updated ? `Associado salvo. ${r.open_updated} mensalidade(s) em aberto ajustada(s) a partir do próximo mês.` : 'Associado salvo.');
       } else {
         const r = await api.post('/members', body);
         toast(`Associado cadastrado. ${r.generated} mensalidade(s) gerada(s) em Contas a receber.`);
@@ -84,7 +85,6 @@ function MemberForm({ open, onClose, item, onSaved }) {
           <Input className="sm:col-span-2" label="Nome" required value={f.name || ''} onChange={set('name')} maxLength={160} data-autofocus />
           <Input label="WhatsApp" value={f.whatsapp || ''} onChange={set('whatsapp')} inputMode="tel" placeholder="(19) 99999-9999" hint="Com DDD. Usado para os avisos de cobrança." />
           <Input label="E-mail" type="email" value={f.email || ''} onChange={set('email')} placeholder="nome@exemplo.com" />
-          <MoneyInput label="Mensalidade" required value={f.monthly_fee} onChange={set('monthly_fee')} />
           <Input label="Dia do vencimento" type="number" min={1} max={31} value={f.due_day} onChange={set('due_day')} hint="Dia 29 a 31 vira o último dia nos meses mais curtos." />
           <Input label="Cobrar a partir de" type="month" required value={f.start_month || ''} onChange={set('start_month')}
             hint={past ? 'Os meses passados já entram como mensalidades a receber (e em atraso, se venceram).' : 'Primeiro mês da mensalidade.'} />
@@ -97,11 +97,23 @@ function MemberForm({ open, onClose, item, onSaved }) {
           <CategorySelect categories={cats} type="receita" value={f.category_id} onChange={set('category_id')} hint="Vazio = Mensalidades." />
         </div>
         <fieldset className="rounded-app-sm border border-line p-3">
+          <legend className="px-1 text-xs font-medium text-ink-soft">Valor da mensalidade</legend>
+          {feeInfo?.current || feeInfo?.items?.length ? (
+            <p className="text-sm">Segue a tabela: <strong>{feeInfo.current ? money(feeInfo.current) : '—'}</strong> por mês hoje
+              {feeInfo.items?.some((x) => x.future) && <span className="text-ink-faint"> (já tem valor novo marcado para os próximos meses)</span>}.
+              <button type="button" className="ml-1 underline" onClick={onGoFees}>Ver valores</button></p>
+          ) : (
+            <Notice tone="warn" title="Falta o valor da mensalidade">Cadastre o valor na aba <button type="button" className="underline" onClick={onGoFees}>Valores da mensalidade</button>; ele vale para todos os associados.</Notice>
+          )}
+          <Toggle label="Valor especial para este associado" checked={f.special} onChange={set('special')} hint="Ex.: desconto ou isenção parcial. Se mudar depois, vale a partir do próximo mês." />
+          {f.special && <MoneyInput label="Valor especial" value={f.monthly_fee} onChange={set('monthly_fee')} />}
+        </fieldset>
+        <fieldset className="rounded-app-sm border border-line p-3">
           <legend className="px-1 text-xs font-medium text-ink-soft">Avisos de cobrança para este associado</legend>
           <Toggle label="Avisar por e-mail" checked={f.notify_email} onChange={set('notify_email')} hint={!f.email ? 'Cadastre o e-mail para receber.' : undefined} />
           <Toggle label="Avisar por WhatsApp" checked={f.notify_whatsapp} onChange={set('notify_whatsapp')} hint={!f.whatsapp ? 'Cadastre o WhatsApp para receber.' : undefined} />
         </fieldset>
-        {item && <Toggle label="Aplicar valor e dia nas mensalidades em aberto" checked={f.apply_to_open} onChange={set('apply_to_open')} hint="As já pagas não mudam." />}
+        {item && <Toggle label="Aplicar o novo dia de vencimento e o nome nas mensalidades em aberto" checked={f.apply_to_open} onChange={set('apply_to_open')} hint="As já pagas não mudam." />}
         <Textarea label="Observações" value={f.notes || ''} onChange={set('notes')} rows={2} maxLength={1000} />
       </div>
     </Modal>
@@ -125,11 +137,119 @@ function useCharge(onDone) {
   return { whatsappLink, send };
 }
 
+/** Corrigir o valor de UMA mensalidade já lançada (em aberto e sem pagamento). */
+function FeeAmountModal({ fee, onClose, onSaved }) {
+  const { toast } = useUI();
+  const [v, setV] = useState(null); const [err, setErr] = useState(''); const [saving, setSaving] = useState(false);
+  useEffect(() => { if (fee) { setV(fee.amount); setErr(''); } }, [fee]);
+  const save = async () => {
+    if (!(v > 0)) return setErr('Informe o valor.');
+    setSaving(true);
+    try { await api.put(`/titles/${fee.id}`, { amount: v }); toast('Valor da mensalidade corrigido.'); onSaved?.(); onClose(); } catch (e) { setErr(errorMessage(e)); } finally { setSaving(false); }
+  };
+  return (
+    <Modal open={!!fee} onClose={onClose} onSubmit={save} title={fee ? `Mensalidade ${monthLabel(fee.month)}` : ''} subtitle="Só esta mensalidade muda. As outras e a tabela continuam como estão."
+      footer={<><button type="button" className="btn-outline" onClick={onClose}>Cancelar</button><SubmitButton loading={saving}>Salvar</SubmitButton></>}>
+      <InlineError error={err} />
+      <MoneyInput label="Valor" value={v} onChange={setV} data-autofocus />
+    </Modal>
+  );
+}
+
+// ---------------- tabela de valores da mensalidade ----------------
+function FeeTable({ onChanged }) {
+  const { can } = useAuth();
+  const { toast, confirm } = useUI();
+  const { data, error, loading, reload } = useAsync(() => api.get('/members/fees'), []);
+  const [form, setForm] = useState(null); // { item? }
+  const [f, setF] = useState({}); const [err, setErr] = useState(''); const [saving, setSaving] = useState(false);
+  const edit = can(PM.manage);
+  const first = data && !data.items.length;
+  useEffect(() => {
+    if (!form) return;
+    setErr('');
+    setF(form.item ? { amount: form.item.amount, effective_month: form.item.effective_month, notes: form.item.notes || '' }
+      : { amount: null, effective_month: first ? today().slice(0, 7) : data.next_month, notes: '' });
+  }, [form]); // eslint-disable-line react-hooks/exhaustive-deps
+  const set = (k) => (v) => setF((x) => ({ ...x, [k]: v && v.target ? v.target.value : v }));
+  const save = async () => {
+    if (!(f.amount > 0)) return setErr('Informe o valor.');
+    setSaving(true); setErr('');
+    try {
+      const body = { amount: f.amount, effective_month: f.effective_month, notes: f.notes.trim() || null };
+      const r = form.item ? await api.put(`/members/fees/${form.item.id}`, body) : await api.post('/members/fees', body);
+      toast(`${form.item ? 'Valor corrigido' : 'Novo valor salvo'}${r.recalculated ? `: ${r.recalculated} mensalidade(s) em aberto ajustada(s)` : ''}${r.generated ? `; ${r.generated} mensalidade(s) gerada(s)` : ''}.`);
+      setForm(null); reload(); onChanged?.();
+    } catch (e) { setErr(errorMessage(e)); } finally { setSaving(false); }
+  };
+  const remove = async (x) => {
+    const ok = await confirm({ title: 'Excluir este valor?', danger: true, confirmText: 'Excluir',
+      message: `As mensalidades em aberto a partir de ${monthLabel(x.effective_month)} voltam para o valor anterior da tabela. As já pagas não mudam.` });
+    if (!ok) return;
+    try { const r = await api.del(`/members/fees/${x.id}`); toast(`Valor excluído${r.recalculated ? `: ${r.recalculated} mensalidade(s) em aberto ajustada(s)` : ''}.`); reload(); onChanged?.(); }
+    catch (e) { toast(errorMessage(e), 'error'); }
+  };
+  if (loading && !data) return <Loading />;
+  if (error) return <ErrorState error={error} onRetry={reload} className="card" />;
+  const rows = [...data.items].reverse(); // cronológico: do mais antigo para o mais novo
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-xs text-ink-faint">Mensalidade de hoje (vale para todos sem valor especial)</div>
+          <div className="text-2xl font-semibold tabular-nums">{data.current ? money(data.current) : '—'}</div>
+        </div>
+        {edit && <button type="button" className="btn-primary" onClick={() => setForm({})}><Plus className="h-4 w-4" aria-hidden="true" /> {first ? 'Cadastrar o valor' : 'Novo valor'}</button>}
+      </div>
+      <Notice title="Como funciona">
+        O valor é preenchido uma vez e vale para todos os associados. Quando o valor muda, o novo vale <strong>a partir do próximo mês</strong>: as mensalidades dos meses anteriores continuam com o valor antigo.
+        Errou um valor? Corrija na lista: as mensalidades em aberto (sem pagamento) desde aquele mês são recalculadas; as pagas não mudam.
+      </Notice>
+      {!rows.length ? <EmptyState className="card" icon={BadgeDollarSign} title="Nenhum valor cadastrado">Cadastre o valor da mensalidade para começar a gerar as cobranças.</EmptyState> : (
+        <div className="card overflow-x-auto">
+          <table className="table-clean">
+            <caption className="sr-only">Valores da mensalidade em ordem cronológica</caption>
+            <thead><tr><th scope="col">Vale de</th><th scope="col">Até</th><th scope="col" className="text-right">Valor</th><th scope="col">Observação</th><th scope="col">Lançado por</th><th scope="col"><span className="sr-only">Ações</span></th></tr></thead>
+            <tbody>
+              {rows.map((x) => (
+                <tr key={x.id} className={cx(x.current && 'bg-accent/5')}>
+                  <td className="whitespace-nowrap font-medium tabular-nums">{monthLabel(x.effective_month)}</td>
+                  <td className="whitespace-nowrap tabular-nums text-ink-soft">{x.until_month ? monthLabel(addMonth(x.until_month, -1)) : 'em diante'}</td>
+                  <td className="whitespace-nowrap text-right font-semibold tabular-nums">{money(x.amount)}</td>
+                  <td className="max-w-[240px] truncate text-sm text-ink-soft">{x.current ? <Badge tone="positive" className="mr-1">Vigente</Badge> : x.future ? <Badge tone="brand" className="mr-1">Próximo</Badge> : null}{x.notes}</td>
+                  <td className="text-xs text-ink-faint">{x.created_by_name || '—'}<div>{new Date(x.created_at).toLocaleDateString('pt-BR')}</div></td>
+                  <td className="whitespace-nowrap text-right">{edit && <ActionMenu label={`Ações do valor de ${monthLabel(x.effective_month)}`} actions={[
+                    { label: 'Corrigir', icon: Pencil, onClick: () => setForm({ item: x }) },
+                    data.items.length > 1 && { label: 'Excluir', icon: Trash2, onClick: () => remove(x), danger: true },
+                  ]} />}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <Modal open={!!form} onClose={() => setForm(null)} onSubmit={save} title={form?.item ? 'Corrigir valor' : first ? 'Valor da mensalidade' : 'Novo valor da mensalidade'}
+        subtitle={form?.item ? 'Use para corrigir um valor lançado errado.' : first ? 'Vale para todos os associados.' : 'O novo valor vale a partir do próximo mês; os meses anteriores não mudam.'}
+        footer={<><button type="button" className="btn-outline" onClick={() => setForm(null)}>Cancelar</button><SubmitButton loading={saving}>Salvar</SubmitButton></>}>
+        <div className="space-y-4">
+          <InlineError error={err} />
+          <MoneyInput label="Valor da mensalidade" required value={f.amount} onChange={set('amount')} data-autofocus />
+          <Input label="Vale a partir de" type="month" required value={f.effective_month || ''} onChange={set('effective_month')}
+            min={form?.item || first ? undefined : data.next_month} hint={form?.item ? 'Mudar o mês recalcula as mensalidades em aberto do período.' : first ? 'Pode ser um mês passado, se os associados já pagam desde antes.' : `A partir de ${monthLabel(data.next_month)} ou depois.`} />
+          <Input label="Observação (opcional)" value={f.notes || ''} onChange={set('notes')} maxLength={200} placeholder="Ex.: reajuste aprovado em assembleia" />
+        </div>
+      </Modal>
+    </div>
+  );
+}
+const addMonth = (ym, k) => { const [y, m] = ym.split('-').map(Number); const d = new Date(Date.UTC(y, m - 1 + k, 1)); return d.toISOString().slice(0, 7); };
+
 // ---------------- detalhes ----------------
 function MemberDetails({ id, onClose, onEdit, onChanged }) {
   const { can } = useAuth();
   const { data: m, error, reload } = useAsync(() => (id ? api.get(`/members/${id}`) : null), [id]);
   const [settle, setSettle] = useState(null);
+  const [editFee, setEditFee] = useState(null);
   const charge = useCharge(reload);
   const overdue = m?.fees?.filter((f) => f.overdue) || [];
   const footer = m && can(PM.manage) && (
@@ -140,7 +260,7 @@ function MemberDetails({ id, onClose, onEdit, onChanged }) {
     </>
   );
   return (
-    <Drawer open={!!id} onClose={onClose} title={m?.name || 'Associado'} subtitle={m ? `Nº ${m.number} · ${money(m.monthly_fee)} todo dia ${m.due_day}` : undefined} footer={footer}>
+    <Drawer open={!!id} onClose={onClose} title={m?.name || 'Associado'} subtitle={m ? `Nº ${m.number} · ${m.monthly_fee != null ? money(m.monthly_fee) : 'sem valor'}${m.custom_fee != null ? ' (especial)' : ''} todo dia ${m.due_day}` : undefined} footer={footer}>
       {error ? <ErrorState error={error} onRetry={reload} /> : !m ? <Loading /> : (
         <div className="space-y-6">
           <div className="flex flex-wrap gap-1"><Badge tone={STATUS[m.status][1]}>{STATUS[m.status][0]}</Badge>
@@ -164,7 +284,9 @@ function MemberDetails({ id, onClose, onEdit, onChanged }) {
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
-                      <span className="tabular-nums">{money(f.amount)}</span>
+                      {f.status === 'aberto' && !f.paid && can(P.titlesEdit)
+                        ? <button type="button" className="focus-ring rounded tabular-nums underline decoration-dotted underline-offset-4" title="Corrigir o valor desta mensalidade" onClick={() => setEditFee(f)}>{money(f.amount)}</button>
+                        : <span className="tabular-nums">{money(f.amount)}</span>}
                       {f.status === 'pago' ? <Badge tone="positive">Paga</Badge> : f.status === 'cancelado' ? <Badge>Cancelada</Badge>
                         : can(P.titlesSettle) ? <button type="button" className="btn-outline btn-sm" onClick={() => setSettle({ id: f.id, kind: 'receber', open_amount: f.open, company_id: m.company?.id, description: `Mensalidade ${monthLabel(f.month)} — ${m.name}` })}>
                           <CheckCircle2 className="h-3.5 w-3.5 text-positive" aria-hidden="true" /> Receber</button>
@@ -193,6 +315,7 @@ function MemberDetails({ id, onClose, onEdit, onChanged }) {
         </div>
       )}
       <SettleModal open={!!settle} onClose={() => setSettle(null)} title={settle} onDone={() => { reload(); onChanged?.(); }} />
+      <FeeAmountModal fee={editFee} onClose={() => setEditFee(null)} onSaved={() => { reload(); onChanged?.(); }} />
     </Drawer>
   );
 }
@@ -258,7 +381,7 @@ function MembersList({ reloadKey, onOpen, onEdit, onChanged }) {
                     <td className="max-w-[240px]"><button type="button" className="focus-ring block max-w-full truncate rounded text-left font-medium hover:underline" onClick={() => onOpen(m)}>{m.name}</button>
                       <div className="text-xs text-ink-faint">Nº {m.number}{m.last_payment && ` · último pagamento ${date(m.last_payment)}`}</div></td>
                     <td className="text-xs text-ink-soft"><div>{m.whatsapp_display || <span className="text-ink-faint">sem WhatsApp</span>}</div><div className="max-w-[200px] truncate">{m.email || <span className="text-ink-faint">sem e-mail</span>}</div></td>
-                    <td className="whitespace-nowrap text-right tabular-nums">{money(m.monthly_fee)}</td>
+                    <td className="whitespace-nowrap text-right tabular-nums">{m.monthly_fee != null ? money(m.monthly_fee) : '—'}{m.custom_fee != null && <div className="text-xs text-ink-faint">especial</div>}</td>
                     <td className="whitespace-nowrap">dia {m.due_day}</td>
                     <td><div className="flex flex-wrap gap-1"><Badge tone={s.tone}>{s.label}</Badge>{m.status === 'suspenso' && m.overdue.count > 0 && <Badge tone="warn">Suspenso</Badge>}</div></td>
                     <td className={cx('whitespace-nowrap text-right tabular-nums', m.overdue.count > 0 && 'font-semibold text-danger')}>{m.overdue.count ? <>{money(m.overdue.amount)}<div className="text-xs font-normal">{m.overdue.days} dias</div></> : '—'}</td>
@@ -279,7 +402,7 @@ function MembersList({ reloadKey, onOpen, onEdit, onChanged }) {
                   <ActionMenu actions={actions(m)} label={`Mais ações para ${m.name}`} />
                 </div>
                 <div className="mt-2 flex items-end justify-between gap-2">
-                  <div className="text-sm"><span className="tabular-nums">{money(m.monthly_fee)}</span> <span className="text-xs text-ink-faint">· dia {m.due_day}</span></div>
+                  <div className="text-sm"><span className="tabular-nums">{m.monthly_fee != null ? money(m.monthly_fee) : '—'}</span>{m.custom_fee != null && <span className="text-xs text-ink-faint"> (especial)</span>} <span className="text-xs text-ink-faint">· dia {m.due_day}</span></div>
                   <div className="text-right"><Badge tone={s.tone}>{s.label}</Badge>{m.overdue.count > 0 && <div className="mt-1 text-sm font-semibold tabular-nums text-danger">{money(m.overdue.amount)}</div>}</div>
                 </div>
               </li>
@@ -438,10 +561,12 @@ export default function Members() {
   const [open, setOpen] = useState(null);
   const [rk, setRk] = useState(0);
   const { data: sum } = useAsync(() => api.get('/members'), [rk]);
+  const { data: feeInfo } = useAsync(() => api.get('/members/fees'), [rk]);
   const changed = () => setRk((x) => x + 1);
   const t = sum?.totals;
   const tabs = [
     { value: 'lista', label: 'Associados', icon: Users2 },
+    { value: 'valores', label: 'Valores da mensalidade', icon: History },
     { value: 'atraso', label: 'Em atraso', icon: AlarmClock, count: t?.overdue_members || undefined },
     { value: 'avisos', label: 'Avisos de cobrança', icon: Settings2 },
   ];
@@ -451,7 +576,7 @@ export default function Members() {
         actions={can(PM.manage) && <button type="button" className="btn-cta" onClick={() => setForm({})}><Plus className="h-4 w-4" aria-hidden="true" /> Novo associado</button>} />
       {t && (
         <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <Stat label="Associados ativos" value={t.active} />
+          <Stat label="Mensalidade atual" value={feeInfo?.current ? money(feeInfo.current) : '—'} sub={feeInfo?.items?.some((x) => x.future) ? 'novo valor já marcado' : `${t.active} associado(s) ativo(s)`} />
           <Stat label="Mensalidades por mês" value={money(t.monthly_expected)} />
           <Stat label="Em atraso" value={t.overdue_members} tone={t.overdue_members ? 'danger' : undefined} sub="associado(s)" />
           <Stat label="Valor em atraso" value={money(t.overdue_amount)} tone={t.overdue_amount ? 'danger' : undefined} />
@@ -461,13 +586,16 @@ export default function Members() {
       {tab === 'lista' && <MembersList reloadKey={rk} onOpen={(m) => setOpen(m.id)} onEdit={(m) => setForm({ item: m })} onChanged={changed} />}
       {tab === 'atraso' && <OverdueReport reloadKey={rk} onOpen={(m) => setOpen(m.id)} />}
       {tab === 'avisos' && <ReminderSettings />}
+      {tab === 'valores' && <FeeTable onChanged={changed} />}
       {tab === 'lista' && !sum?.items?.length && can(PM.manage) && (
         <Notice className="mt-4" title="Como funciona">
-          Cadastre o associado com o valor e o dia do vencimento. Todo mês a mensalidade aparece em Contas a receber; quando ele paga, dê baixa por lá ou aqui em "Receber".
+          {!feeInfo?.items?.length && <>Comece cadastrando o valor da mensalidade em <button type="button" className="underline" onClick={() => setParams({ aba: 'valores' }, { replace: true })}>Valores da mensalidade</button> (vale para todos). </>}
+          Depois cadastre o associado com o dia do vencimento. Todo mês a mensalidade aparece em Contas a receber; quando ele paga, dê baixa por lá ou aqui em "Receber".
           Quem atrasar recebe o aviso por e-mail ou WhatsApp, e você recebe o relatório dos atrasados.
         </Notice>
       )}
-      <MemberForm open={!!form} onClose={() => setForm(null)} item={form?.item} onSaved={changed} />
+      <MemberForm open={!!form} onClose={() => setForm(null)} item={form?.item} onSaved={changed} feeInfo={feeInfo}
+        onGoFees={() => { setForm(null); setParams({ aba: 'valores' }, { replace: true }); }} />
       <MemberDetails id={open} onClose={() => setOpen(null)} onEdit={(m) => { setOpen(null); setForm({ item: m }); }} onChanged={changed} />
     </div>
   );
