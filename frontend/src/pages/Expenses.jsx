@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Receipt, Plus, Trash2, Send, Pencil, Wallet, Paperclip, ClipboardCheck } from 'lucide-react';
+import { Receipt, Plus, Trash2, Send, Pencil, Wallet, Paperclip, ClipboardCheck, UserCheck, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useUI } from '../context/UIContext';
 import { api, qs, errorMessage, notifyCountsChanged } from '../lib/api';
@@ -26,6 +26,54 @@ const STATUS = {
 const sum = (items) => round2((items || []).reduce((a, i) => a + (Number(i.amount) || 0), 0));
 const blank = () => ({ date: today(), description: '', category_id: null, amount: null, doc: null });
 
+/** Nome da despesa ligado ao associado: digita e escolhe na lista; se não achar, o nome fica livre (sem vínculo). */
+function MemberName({ value, member, onChange }) {
+  const id = useId();
+  const [list, setList] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  const wrap = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const t = setTimeout(() => { api.get(`/expenses/members${qs({ q: value.trim() })}`).then((r) => { setList(r?.items || []); setActive(-1); }).catch(() => setList([])); }, 220);
+    return () => clearTimeout(t);
+  }, [value, open]);
+  useEffect(() => {
+    const close = (e) => { if (wrap.current && !wrap.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+  const pick = (m) => { onChange(m.name, m); setOpen(false); };
+  const onKey = (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setActive((a) => Math.min(a + 1, list.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+    else if (e.key === 'Enter' && open && list[active]) { e.preventDefault(); pick(list[active]); }
+    else if (e.key === 'Escape' && open) { e.stopPropagation(); setOpen(false); }
+  };
+  return (
+    <div ref={wrap} className="relative">
+      <label htmlFor={id} className="label">Nome <span className="text-danger" aria-hidden="true">*</span></label>
+      <div className="relative">
+        <input id={id} className={cx('input', member && 'pr-9')} value={value} maxLength={150} autoComplete="off" placeholder="Nome do associado (ou digite outro nome)"
+          role="combobox" aria-expanded={open} aria-controls={`${id}-l`} aria-autocomplete="list" aria-activedescendant={active >= 0 ? `${id}-${active}` : undefined}
+          onFocus={() => setOpen(true)} onKeyDown={onKey}
+          onChange={(e) => { onChange(e.target.value, member && e.target.value === member.name ? member : null); setOpen(true); }} />
+        {member && <button type="button" className="focus-ring absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-ink-faint hover:text-ink" aria-label="Tirar o vínculo com o associado" onClick={() => onChange(value, null)}><X className="h-4 w-4" /></button>}
+      </div>
+      {member ? <p className="mt-1 flex items-center gap-1 text-xs text-positive"><UserCheck className="h-3.5 w-3.5" aria-hidden="true" /> Associado vinculado: o reembolso é pago a {member.name}.</p>
+        : <p className="mt-1 text-xs text-ink-faint">Escolha o associado na lista. Não achou? Digite o nome: fica sem vínculo.</p>}
+      {open && list.length > 0 && !(member && member.name === value) && (
+        <ul id={`${id}-l`} role="listbox" aria-label="Associados" className="card absolute inset-x-0 top-[4.4rem] z-30 max-h-60 overflow-y-auto p-1 animate-pop">
+          {list.map((m, i) => (
+            <li key={m.id} id={`${id}-${i}`} role="option" aria-selected={i === active} onMouseDown={(e) => { e.preventDefault(); pick(m); }}
+              className={cx('cursor-pointer rounded-app-sm px-3 py-2 text-sm', i === active ? 'bg-muted' : 'hover:bg-muted')}>{m.name}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function ExpenseForm({ open, onClose, expense, onSaved }) {
   const { companies, companyId } = useAuth();
   const { toast } = useUI();
@@ -38,19 +86,19 @@ function ExpenseForm({ open, onClose, expense, onSaved }) {
     setError('');
     loadRefs(['categories']).then((r) => setCats(r.categories));
     setF(expense ? {
-      company_id: expense.company?.id, title: expense.title,
+      company_id: expense.company?.id, title: expense.title, member: expense.member || null, event: expense.event || '',
       items: (expense.items || []).map((i) => ({ ...i, doc: i.document_id ? { id: i.document_id, filename: 'Comprovante' } : null })),
-    } : { company_id: companyId || companies[0]?.id || '', title: '', items: [blank()] });
+    } : { company_id: companyId || companies[0]?.id || '', title: '', member: null, event: '', items: [blank()] });
   }, [open, expense]); // eslint-disable-line react-hooks/exhaustive-deps
   const setItem = (i, k, v) => setF((x) => ({ ...x, items: x.items.map((it, j) => (j === i ? { ...it, [k]: v } : it)) }));
   const save = async (send) => {
     const items = f.items.filter((i) => i.description.trim() || i.amount);
-    if (!f.title.trim()) { setError('Dê um nome (ex.: Viagem a Campinas — outubro).'); return; }
+    if (!f.title.trim()) { setError('Informe o nome: escolha o associado ou digite o nome.'); return; }
     if (!items.length || items.some((i) => !i.description.trim() || !(i.amount > 0) || !i.date)) { setError('Cada item precisa de data, descrição e valor.'); return; }
     setSaving(send ? 'send' : 'draft'); setError('');
     try {
       const body = {
-        company_id: f.company_id, title: f.title.trim(),
+        company_id: f.company_id, title: f.title.trim(), member_id: f.member?.id || null, event: f.event.trim() || null,
         items: items.map((i) => ({ date: i.date, description: i.description.trim(), category_id: i.category_id || null, amount: round2(i.amount), document_id: i.doc?.id || null })),
       };
       let id = expense?.id;
@@ -68,8 +116,11 @@ function ExpenseForm({ open, onClose, expense, onSaved }) {
         <div className="space-y-4">
           <InlineError error={error} />
           <div className="grid gap-4 sm:grid-cols-2">
-            <Input className={companies.length > 1 ? '' : 'sm:col-span-2'} label="Nome" required value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} maxLength={150} placeholder="Ex.: Visita a cliente em São Paulo" />
+            <div className={companies.length > 1 ? '' : 'sm:col-span-2'}>
+              <MemberName value={f.title} member={f.member} onChange={(title, member) => setF((x) => ({ ...x, title, member }))} />
+            </div>
             {companies.length > 1 && <Select label="Empresa" value={f.company_id} onChange={(e) => setF({ ...f, company_id: e.target.value })}>{companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select>}
+            <Input className="sm:col-span-2" label="Evento" value={f.event} onChange={(e) => setF({ ...f, event: e.target.value })} maxLength={160} placeholder="Ex.: Encontro de motoclubes em Campinas" />
           </div>
           <ul className="space-y-3">
             {f.items.map((it, i) => (
@@ -182,7 +233,8 @@ export default function Expenses() {
               <li key={e.id}>
                 <button type="button" onClick={() => setSel(e)} className="card focus-ring flex w-full flex-wrap items-center gap-3 p-4 text-left hover:border-accent/60">
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{e.title}</span><Badge tone={st.tone}>{st.label}</Badge></div>
+                    <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{e.title}</span>{e.member && <Badge tone="brand">Associado</Badge>}<Badge tone={st.tone}>{st.label}</Badge></div>
+                    {e.event && <div className="text-xs text-ink-soft">Evento: {e.event}</div>}
                     <div className="text-xs text-ink-faint">{e.number ? `#${e.number} · ` : ''}{e.user?.name} · {(e.items || []).length} gasto(s) · {dateTime(e.created_at)}</div>
                   </div>
                   <div className="text-lg font-semibold tabular-nums">{money(e.total)}</div>
@@ -206,7 +258,9 @@ export default function Expenses() {
           <div className="space-y-4">
             <Badge tone={s.tone}>{s.label}</Badge>
             <dl className="divide-y divide-line">
-              <DRow label="Quem gastou">{sel.user?.name}</DRow>
+              {sel.member && <DRow label="Associado">{sel.member.name}</DRow>}
+              {sel.event && <DRow label="Evento">{sel.event}</DRow>}
+              <DRow label="Lançado por">{sel.user?.name}</DRow>
               <DRow label="Empresa">{sel.company?.name}</DRow>
               <DRow label="Total">{money(sel.total)}</DRow>
             </dl>

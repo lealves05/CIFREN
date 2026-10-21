@@ -3,7 +3,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { orgTx } from '../db.js';
-import { HttpError, parse, notFound, uuidParam, isUuid, today, splitAmount, addInterval, toCents, fromCents } from '../util.js';
+import { HttpError, parse, notFound, uuidParam, isUuid, today, splitAmount, addInterval, toCents, fromCents, likeEsc } from '../util.js';
 import { need, can, assertCompany, companyAllowed } from '../auth.js';
 import { audit } from '../audit.js';
 import { needsApproval, requestApproval } from '../lib/approvals.js';
@@ -143,7 +143,8 @@ export const expenses = Router();
 const expItem = z.object({ date: dateStr, description: z.string().trim().min(1).max(200), category_id: opt, amount: money.refine((v) => v > 0, 'valor maior que zero'), document_id: opt });
 const eShape = async (db, e) => {
   const c = await db.one('select id, name from companies where id=$1', [e.company_id]);
-  return { id: e.id, number: Number(e.number), company: c, user: { id: e.user_id, name: e.user_name }, title: e.title, items: e.items, total: Number(e.total), status: e.status,
+  const m = e.member_id ? await db.one('select id, name from members where id=$1', [e.member_id]) : null;
+  return { id: e.id, number: Number(e.number), company: c, user: { id: e.user_id, name: e.user_name }, title: e.title, member: m, event: e.event || null, items: e.items, total: Number(e.total), status: e.status,
     approval_status: e.approval_status, title_id: e.title_id, paid_at: e.paid_at, created_at: e.created_at };
 };
 async function loadE(db, req, id) {
@@ -158,6 +159,21 @@ async function checkItems(db, items) {
     if (i.document_id && !(await db.one('select 1 from documents where id=$1', [i.document_id]))) throw new HttpError(400, 'Comprovante não encontrado.');
   }
 }
+/** Busca de associados pelo nome para o campo Nome da despesa (só id e nome; quem lança despesa não precisa ver o cadastro). */
+expenses.get('/members', need('despesas.solicitar'), async (req, res) => {
+  const q = String(req.query.q || '').trim().slice(0, 80);
+  const items = await orgTx(req.orgId, async (db) => (await db.all(`select id, name, company_id from members where status <> 'encerrado' and ($1 = '' or name ilike $2)
+      order by lower(name) limit 30`, [q, `%${likeEsc(q)}%`])).filter((m) => companyAllowed(req, m.company_id)).slice(0, 15).map(({ id, name }) => ({ id, name })));
+  res.json({ items });
+});
+async function checkMember(db, req, id) {
+  if (!id) return null;
+  const m = await db.one('select id, name, company_id, counterparty_id from members where id=$1', [id]);
+  if (!m || !companyAllowed(req, m.company_id)) throw new HttpError(400, 'Associado não encontrado.');
+  return m;
+}
+const optMember = z.string().refine(isUuid, 'associado inválido').nullable().optional();
+const optEvent = z.string().trim().max(160).nullable().optional(); // ausente = não muda; vazio = sem evento
 expenses.get('/', need('despesas.solicitar', 'despesas.aprovar', 'despesas.pagar'), async (req, res) => {
   const seeAll = can(req, 'despesas.aprovar') || can(req, 'despesas.pagar');
   const mine = req.query.mine === '1' || !seeAll;
@@ -169,27 +185,31 @@ expenses.get('/', need('despesas.solicitar', 'despesas.aprovar', 'despesas.pagar
   res.json({ items });
 });
 expenses.post('/', need('despesas.solicitar'), async (req, res) => {
-  const d = parse(z.object({ company_id: z.string().refine(isUuid, 'empresa inválida'), title: z.string().trim().min(2).max(160), items: z.array(expItem).min(1, 'inclua ao menos uma despesa').max(100) }), req.body);
+  const d = parse(z.object({ company_id: z.string().refine(isUuid, 'empresa inválida'), title: z.string().trim().min(2).max(160), member_id: optMember, event: optEvent,
+    items: z.array(expItem).min(1, 'inclua ao menos uma despesa').max(100) }), req.body);
   assertCompany(req, d.company_id);
   const out = await orgTx(req.orgId, async (db) => {
     await checkItems(db, d.items);
+    await checkMember(db, req, d.member_id);
     const total = sumCents(d.items.map((i) => toCents(i.amount)));
-    const e = await db.one(`insert into expenses (org_id, company_id, user_id, user_name, title, items, total) values ($1,$2,$3,$4,$5,$6,$7) returning *`,
-      [req.orgId, d.company_id, req.user.id, req.user.name, d.title, JSON.stringify(d.items), total]);
+    const e = await db.one(`insert into expenses (org_id, company_id, user_id, user_name, title, items, total, member_id, event) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
+      [req.orgId, d.company_id, req.user.id, req.user.name, d.title, JSON.stringify(d.items), total, d.member_id || null, d.event || null]);
     await audit(db, { actor: actor(req), req, action: 'despesa.criada', entity: 'expense', entityId: e.id, summary: `Prestação nº ${e.number}: ${d.title} — R$ ${total.toFixed(2)}` });
     return eShape(db, e);
   });
   res.status(201).json(out);
 });
 expenses.put('/:id', need('despesas.solicitar'), async (req, res) => {
-  const d = parse(z.object({ title: z.string().trim().min(2).max(160).optional(), items: z.array(expItem).min(1).max(100).optional() }), req.body);
+  const d = parse(z.object({ title: z.string().trim().min(2).max(160).optional(), member_id: optMember, event: optEvent, items: z.array(expItem).min(1).max(100).optional() }), req.body);
   const out = await orgTx(req.orgId, async (db) => {
     const e = await loadE(db, req, req.params.id);
     if (e.user_id !== req.user.id) throw new HttpError(403, 'Só quem criou altera a prestação de contas.');
     if (!['rascunho', 'reprovada'].includes(e.status)) throw new HttpError(409, 'Depois de enviada, a prestação não muda.');
     if (d.items) await checkItems(db, d.items);
+    if (d.member_id !== undefined) await checkMember(db, req, d.member_id);
     const items = d.items || e.items; const total = sumCents(items.map((i) => toCents(i.amount)));
-    const r = await db.one("update expenses set title=coalesce($2,title), items=$3, total=$4, status='rascunho', approval_status=null, updated_at=now() where id=$1 returning *", [e.id, d.title ?? null, JSON.stringify(items), total]);
+    const r = await db.one(`update expenses set title=coalesce($2,title), items=$3, total=$4, member_id=$5, event=$6, status='rascunho', approval_status=null, updated_at=now() where id=$1 returning *`,
+      [e.id, d.title ?? null, JSON.stringify(items), total, d.member_id === undefined ? e.member_id : d.member_id, d.event === undefined ? e.event : d.event || null]);
     return eShape(db, r);
   });
   res.json(out);
@@ -201,7 +221,7 @@ expenses.post('/:id/submit', need('despesas.solicitar'), async (req, res) => {
     if (!['rascunho', 'reprovada'].includes(e.status)) throw new HttpError(409, 'Esta prestação já foi enviada.');
     // reembolso sempre passa por aprovação de outra pessoa (regra 0 = toda prestação)
     const r = await db.one("update expenses set status='enviada', approval_status='pendente', updated_at=now() where id=$1 returning *", [e.id]);
-    await requestApproval(db, req, { entity: 'expense', entityId: e.id, companyId: e.company_id, amount: Number(e.total), summary: `Reembolso nº ${e.number} de ${e.user_name}: ${e.title}` });
+    await requestApproval(db, req, { entity: 'expense', entityId: e.id, companyId: e.company_id, amount: Number(e.total), summary: `Reembolso nº ${e.number} de ${e.user_name}: ${e.title}${e.event ? ` (${e.event})` : ''}` });
     return eShape(db, r);
   });
   res.json(out);
@@ -211,16 +231,20 @@ expenses.post('/:id/pay', need('despesas.pagar'), async (req, res) => {
   const out = await orgTx(req.orgId, async (db) => {
     const e = await loadE(db, req, req.params.id);
     if (e.status !== 'aprovada') throw new HttpError(409, e.status === 'paga' ? 'Este reembolso já foi pago.' : 'Só reembolsos aprovados podem ser pagos.');
-    let cp = await db.one("select id from counterparties where name=$1 and kind in ('fornecedor','ambos') limit 1", [`Reembolso — ${e.user_name}`]);
-    if (!cp) cp = await db.one("insert into counterparties (org_id, kind, name, notes) values ($1,'fornecedor',$2,'Criado para reembolsos de despesas') returning id", [req.orgId, `Reembolso — ${e.user_name}`]);
+    // ligada a um associado: o reembolso é pago a ele (o cadastro dele vira o favorecido); sem vínculo, a quem lançou
+    const mem = e.member_id ? await db.one('select counterparty_id, name from members where id=$1', [e.member_id]) : null;
+    let cp = mem?.counterparty_id ? { id: mem.counterparty_id } : null;
+    const payee = mem?.name || e.user_name;
+    if (!cp) cp = await db.one("select id from counterparties where name=$1 and kind in ('fornecedor','ambos') limit 1", [`Reembolso — ${payee}`]);
+    if (!cp) cp = await db.one("insert into counterparties (org_id, kind, name, notes) values ($1,'fornecedor',$2,'Criado para reembolsos de despesas') returning id", [req.orgId, `Reembolso — ${payee}`]);
     const cats = [...new Set((e.items || []).map((i) => i.category_id).filter(Boolean))];
     const t = await db.one(`insert into titles (org_id, company_id, kind, description, counterparty_id, category_id, due_date, competence_date, amount, approval_status, source, created_by)
         values ($1,$2,'pagar',$3,$4,$5,$6,$6,$7,'aprovado','reembolso',$8) returning *`,
-    [req.orgId, e.company_id, `Reembolso nº ${e.number}: ${e.title} (${e.user_name})`, cp.id, cats.length === 1 ? cats[0] : null, d.paid_at, e.total, req.user.id]);
+    [req.orgId, e.company_id, `Reembolso nº ${e.number}: ${e.title}${e.event ? ` — ${e.event}` : ''} (${payee})`.slice(0, 200), cp.id, cats.length === 1 ? cats[0] : null, d.paid_at, e.total, req.user.id]);
     for (const i of e.items || []) if (i.document_id) await db.query("insert into document_links (org_id, document_id, entity, entity_id) values ($1,$2,'title',$3) on conflict do nothing", [req.orgId, i.document_id, t.id]);
     await settleTitle(db, req, t, { account_id: d.account_id, paid_at: d.paid_at, amount: Number(e.total), method: 'transferencia', notes: `Reembolso nº ${e.number}` }, 'reembolso');
     const r = await db.one("update expenses set status='paga', title_id=$2, paid_at=$3, updated_at=now() where id=$1 returning *", [e.id, t.id, d.paid_at]);
-    await audit(db, { actor: actor(req), req, action: 'despesa.paga', entity: 'expense', entityId: e.id, summary: `Reembolso nº ${e.number} pago: R$ ${Number(e.total).toFixed(2)} a ${e.user_name}` });
+    await audit(db, { actor: actor(req), req, action: 'despesa.paga', entity: 'expense', entityId: e.id, summary: `Reembolso nº ${e.number} pago: R$ ${Number(e.total).toFixed(2)} a ${payee}` });
     await notifyUsers(db, [e.user_id], { kind: 'reembolso', title: 'Reembolso pago', body: `Seu reembolso "${e.title}" (R$ ${Number(e.total).toFixed(2)}) foi pago.`, link: '/despesas', dedupe: `pago:${e.id}` });
     return eShape(db, r);
   });
