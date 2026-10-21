@@ -27,7 +27,7 @@ export function titleFlags(t) {
   if (t.approval_status === 'reprovado') out.push({ key: 'ap', label: 'Reprovado', tone: 'danger' });
   if (t.estimated) out.push({ key: 'est', label: 'Valor estimado', tone: 'warn', title: 'Valor estimado — aguardando a conta chegar' });
   const src = t.source && t.source !== 'manual' ? (SOURCE_NAME[t.source] !== undefined ? SOURCE_NAME[t.source] : String(t.source).toUpperCase()) : null;
-  if (src) out.push({ key: 'src', label: `Veio do ${src}`, tone: 'neutral' });
+  if (src) out.push({ key: 'src', label: t.source === 'recorrente' ? 'Recorrente' : `Veio do ${src}`, tone: 'neutral' });
   if (t.member_credit) out.push({ key: 'cred', label: 'Crédito do associado', tone: 'brand', title: 'Saldo de crédito do associado no RUSTEN: diminui sozinho quando ele consome' });
   return out;
 }

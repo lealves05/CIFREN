@@ -5,7 +5,7 @@ import { orgTx } from '../db.js';
 import { HttpError, parse, notFound, uuidParam, isUuid, today, toCents, fromCents } from '../util.js';
 import { need, assertCompany, companyAllowed } from '../auth.js';
 import { audit } from '../audit.js';
-import { generate, materialize, setActual, dueDates, estimate } from '../lib/recurring.js';
+import { generate, materialize, setActual, dueDates, estimate, syncLaunched, withdrawLaunched } from '../lib/recurring.js';
 
 export const recurring = Router();
 const actor = (req) => ({ id: req.user.id, name: req.user.name });
@@ -96,7 +96,8 @@ recurring.put('/:id', need('recorrencias.gerenciar'), async (req, res) => {
     // muda só o futuro ainda previsto: ocorrências previstas que não batem mais com as datas novas saem
     const valid = new Set(dueDates(c, today(), '2999-12-31'));
     await db.query("delete from recurring_occurrences where commitment_id=$1 and status='prevista' and due_date >= $2 and not (due_date = any($3::date[]))", [c.id, today(), [...valid].slice(0, 500)]);
-    await generate(db, c);
+    await syncLaunched(db, c);
+    await generate(db, c); await materialize(db, c);
     await audit(db, { actor: actor(req), req, action: 'recorrente.alterado', entity: 'recurring', entityId: c.id, summary: c.name, data: d });
     return shapeOne(db, c);
   });
@@ -108,8 +109,11 @@ for (const [path, status, label] of [['pause', 'pausado', 'pausado'], ['resume',
       const c = await loadC(db, req, req.params.id);
       if (c.status === 'encerrado' && status !== 'encerrado') throw new HttpError(409, 'Compromisso encerrado não volta. Crie outro.');
       await db.query('update recurring_commitments set status=$2, updated_at=now() where id=$1', [c.id, status]);
-      if (status !== 'ativo') await db.query("delete from recurring_occurrences where commitment_id=$1 and status='prevista'", [c.id]); // nunca apaga as já lançadas/reais
-      else await generate(db, { ...c, status });
+      if (status !== 'ativo') {
+        // contas futuras que o compromisso criou e ninguém mexeu saem junto (as pagas, com baixa ou com valor real ficam como estão)
+        await withdrawLaunched(db, c, `Compromisso recorrente ${label}.`);
+        await db.query("delete from recurring_occurrences where commitment_id=$1 and status='prevista'", [c.id]);
+      } else { await generate(db, { ...c, status }); await materialize(db, { ...c, status }); }
       await audit(db, { actor: actor(req), req, action: `recorrente.${path}`, entity: 'recurring', entityId: c.id, summary: `${c.name} ${label}` });
     });
     res.json({ ok: true });

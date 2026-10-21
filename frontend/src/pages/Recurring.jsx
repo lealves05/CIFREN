@@ -112,7 +112,7 @@ function CommitmentForm({ open, onClose, item, template, onSaved }) {
           </div>
         </fieldset>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Input label="Criar a conta quantos dias antes" type="number" min={0} max={60} value={f.lead_days} onChange={set('lead_days')} hint="A conta nasce como “valor estimado — aguardando a conta”." />
+          <Input label="Criar a conta quantos dias antes" type="number" min={0} max={60} value={f.lead_days} onChange={set('lead_days')} hint="As contas até o fim do próximo mês já aparecem em Contas a pagar/receber como “valor estimado”. Use este campo para criar antes as que vencem mais longe." />
           <Input label="Avisar se o real passar da estimativa em (%)" type="number" min={0} max={200} value={f.tolerance_pct} onChange={set('tolerance_pct')} />
         </div>
       </div>

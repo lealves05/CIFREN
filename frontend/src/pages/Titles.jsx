@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Search, CheckCircle2, Eye, Pencil, Ban, ArrowUpFromLine, ArrowDownToLine, FilterX, Layers } from 'lucide-react';
+import { Plus, Search, CheckCircle2, Eye, Pencil, Ban, ArrowUpFromLine, ArrowDownToLine, FilterX, Layers, CalendarRange } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api, qs } from '../lib/api';
 import { usePaged } from '../lib/useAsync';
@@ -13,14 +13,38 @@ import ActionMenu from '../components/ActionMenu';
 import { useTitleActions } from '../components/titles/useTitleActions';
 import { categoryTree } from '../components/CategorySelect';
 import { loadRefs } from '../lib/refData';
+import { readPref, writePref } from '../lib/storage';
+
+// Atalhos de período (contam do dia de hoje, no fuso do navegador)
+const ymd = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+const monthRange = (k) => { const n = new Date(); return [ymd(new Date(n.getFullYear(), n.getMonth() + k, 1)), ymd(new Date(n.getFullYear(), n.getMonth() + k + 1, 0))]; };
+const PERIODS = [
+  { key: 'todas', label: 'Todas' },
+  { key: 'vencidas_proximo', label: 'Vencidas e próximo mês', hint: 'Tudo em aberto até o fim do próximo mês, incluindo as vencidas', range: () => ['', monthRange(1)[1]] },
+  { key: 'vencidas', label: 'Vencidas', hint: 'Só o que já passou do vencimento', status: 'vencidos' },
+  { key: 'mes', label: 'Este mês', hint: 'Vencimento neste mês', range: () => monthRange(0) },
+  { key: 'proximo', label: 'Próximo mês', hint: 'Vencimento no mês que vem', range: () => monthRange(1) },
+];
+const PERIOD_KEY = 'cifren.titulos.periodo';
 
 export default function Titles({ kind }) {
   const { can, companyId, companies } = useAuth();
   const k = KIND[kind];
   const [params, setParams] = useSearchParams();
-  const [status, setStatus] = useState('abertos');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  // período lembrado por navegador (o mesmo atalho vale para pagar e receber)
+  const startPeriod = PERIODS.find((p) => p.key === readPref(PERIOD_KEY)) || PERIODS[0];
+  const [period, setPeriod] = useState(startPeriod.key);
+  const [status, setStatus] = useState(startPeriod.status || 'abertos');
+  const [from, setFrom] = useState(() => startPeriod.range?.()[0] || '');
+  const [to, setTo] = useState(() => startPeriod.range?.()[1] || '');
+  const choosePeriod = (p) => {
+    setPeriod(p.key); writePref(PERIOD_KEY, p.key === 'todas' ? '' : p.key);
+    const [a, b] = p.range ? p.range() : ['', ''];
+    setFrom(a); setTo(b);
+    if (p.status) setStatus(p.status); else if (['vencidos', 'pagos', 'cancelados'].includes(status)) setStatus('abertos');
+  };
+  // mexeu nas datas ou na aba à mão: o atalho deixa de valer
+  const manual = (fn) => (v) => { fn(v); if (period !== 'todas') { setPeriod('todas'); writePref(PERIOD_KEY, ''); } };
   const [q, setQ] = useState('');
   const [qDebounced, setQDebounced] = useState('');
   const [category, setCategory] = useState('');
@@ -45,7 +69,7 @@ export default function Titles({ kind }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totals = list.extra?.totals;
-  const filtered = !!(from || to || qDebounced || category);
+  const filtered = !!(from || to || qDebounced || category || period !== 'todas');
   const showCompany = companies.length > 1 && !companyId;
   const rowActions = (t) => [
     { label: 'Ver detalhes', icon: Eye, onClick: () => actions.openDetails(t) },
@@ -76,7 +100,14 @@ export default function Titles({ kind }) {
         actions={can(P.titlesCreate) && <button type="button" className="btn-cta" onClick={() => actions.openNew(kind)}><Plus className="h-4 w-4" aria-hidden="true" /> Novo</button>} />
 
       <div className="card mb-4">
-        <Tabs label="Situação" tabs={STATUS_TABS} value={status} onChange={setStatus} className="px-2" />
+        <Tabs label="Situação" tabs={STATUS_TABS} value={status} onChange={(v) => { setStatus(v); if (period === 'vencidas' && v !== 'vencidos') { setPeriod('todas'); writePref(PERIOD_KEY, ''); } }} className="px-2" />
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-3 py-2" role="group" aria-label="Período">
+          <CalendarRange className="h-4 w-4 text-ink-faint" aria-hidden="true" />
+          {PERIODS.map((p) => (
+            <button key={p.key} type="button" aria-pressed={period === p.key} title={p.hint} onClick={() => choosePeriod(p)}
+              className={cx('rounded-full border px-3 py-1 text-xs font-semibold transition', period === p.key ? 'border-accent bg-accent/15 text-positive' : 'border-line text-ink-soft hover:bg-muted')}>{p.label}</button>
+          ))}
+        </div>
         <div className="grid gap-3 p-3 sm:grid-cols-2 lg:grid-cols-[1fr_minmax(11rem,14rem)_auto_auto_auto_auto] lg:items-end">
           <div className="relative sm:col-span-2 lg:col-span-1">
             <label htmlFor="busca-titulos" className="label">Buscar</label>
@@ -96,10 +127,10 @@ export default function Titles({ kind }) {
               ) : <option key={root.id} value={root.id}>{root.name}</option>))}
             </select>
           </div>
-          <div><label htmlFor="de" className="label">Vencimento de</label><input id="de" type="date" className="input" value={from} onChange={(e) => setFrom(e.target.value)} /></div>
-          <div><label htmlFor="ate" className="label">até</label><input id="ate" type="date" className="input" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} /></div>
+          <div><label htmlFor="de" className="label">Vencimento de</label><input id="de" type="date" className="input" value={from} onChange={(e) => manual(setFrom)(e.target.value)} /></div>
+          <div><label htmlFor="ate" className="label">até</label><input id="ate" type="date" className="input" value={to} min={from || undefined} onChange={(e) => manual(setTo)(e.target.value)} /></div>
           {companies.length > 1 && <div><span className="label">Empresa</span><CompanyFilter className="[&_select]:max-w-none" /></div>}
-          {filtered && <button type="button" className="btn-ghost" onClick={() => { setFrom(''); setTo(''); setQ(''); setCategory(''); }}><FilterX className="h-4 w-4" aria-hidden="true" /> Limpar</button>}
+          {filtered && <button type="button" className="btn-ghost" onClick={() => { setFrom(''); setTo(''); setQ(''); setCategory(''); setPeriod('todas'); writePref(PERIOD_KEY, ''); }}><FilterX className="h-4 w-4" aria-hidden="true" /> Limpar</button>}
         </div>
       </div>
 

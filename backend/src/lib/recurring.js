@@ -61,20 +61,59 @@ export async function generate(db, c) {
   return n;
 }
 
-/** Cria a conta a pagar/receber das ocorrências que vencem dentro do prazo de antecedência. */
+/** Último dia do mês que vem: até essa data as contas dos compromissos já aparecem em Contas a pagar/receber (vencidas + mês atual + próximo mês). */
+export function horizonEnd(day = today()) {
+  const [y, m] = day.split('-').map(Number);
+  return new Date(Date.UTC(y, m + 1, 0)).toISOString().slice(0, 10);
+}
+const titleText = (c, due) => `${c.name} — ${due.slice(5, 7)}/${due.slice(0, 4)}`;
+
+/** Cria a conta a pagar/receber das ocorrências que vencem até o fim do próximo mês (ou dentro do prazo de antecedência, se for maior). */
 export async function materialize(db, c) {
   if (c.status !== 'ativo') return 0;
-  const limit = addInterval(today(), 'semanal', 0);
-  const { rows } = await db.query(`select * from recurring_occurrences where commitment_id=$1 and status='prevista' and due_date <= ($2::date + $3::int) order by due_date`,
-    [c.id, limit, c.lead_days]);
+  const day = today();
+  const { rows } = await db.query(`select * from recurring_occurrences where commitment_id=$1 and status='prevista' and due_date <= greatest($2::date + $3::int, $4::date) order by due_date`,
+    [c.id, day, c.lead_days, horizonEnd(day)]);
   for (const o of rows) {
     const t = await db.one(`insert into titles (org_id, company_id, kind, description, counterparty_id, category_id, cost_center_id, due_date, competence_date, amount,
           estimated, recurring_occurrence_id, notes, source) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,$11,$12,'recorrente') returning id`,
-    [db.orgId, c.company_id, c.kind, `${c.name} — ${o.due_date.slice(5, 7)}/${o.due_date.slice(0, 4)}`, c.counterparty_id, c.category_id, c.cost_center_id, o.due_date,
+    [db.orgId, c.company_id, c.kind, titleText(c, o.due_date), c.counterparty_id, c.category_id, c.cost_center_id, o.due_date,
       `${o.due_date.slice(0, 7)}-01`, Math.max(Number(o.estimated_amount), 0.01), o.id, 'Valor estimado — aguardando a conta real (compromisso recorrente).']);
     await db.query("update recurring_occurrences set status='lancada', title_id=$2 where id=$1", [o.id, t.id]);
   }
   return rows.length;
+}
+
+/** Contas já criadas pelo compromisso, ainda estimadas, em aberto e sem nenhuma baixa (de hoje em diante). Só essas acompanham mudanças no compromisso. */
+async function untouchedLaunched(db, c) {
+  return (await db.query(`select o.id as occ_id, o.due_date, t.id as title_id from recurring_occurrences o join titles t on t.id=o.title_id
+      where o.commitment_id=$1 and o.status='lancada' and o.due_date >= $2 and t.estimated and t.status='aberto'
+        and not exists (select 1 from settlements s where s.title_id=t.id)`, [c.id, today()])).rows;
+}
+
+/** Tira das contas a pagar/receber o que o compromisso criou e ninguém mexeu (cancela com o motivo) e devolve a ocorrência para ser criada de novo. */
+export async function withdrawLaunched(db, c, reason, keep = () => false) {
+  let n = 0;
+  for (const r of await untouchedLaunched(db, c)) {
+    if (keep(r)) continue;
+    await db.query("update titles set status='cancelado', cancel_reason=$2, cancelled_at=now(), updated_at=now(), version=version+1 where id=$1", [r.title_id, reason]);
+    await db.query('delete from recurring_occurrences where id=$1', [r.occ_id]);
+    n += 1;
+  }
+  return n;
+}
+
+/** Compromisso alterado: as contas já criadas e intocadas acompanham (nome, fornecedor, categoria, centro de custo e valor estimado); data que deixou de existir sai. */
+export async function syncLaunched(db, c) {
+  const valid = new Set(dueDates(c, today(), '2999-12-31'));
+  await withdrawLaunched(db, c, 'Compromisso recorrente alterado: esta data deixou de existir.', (r) => valid.has(r.due_date) && c.status === 'ativo');
+  if (c.status !== 'ativo') return;
+  const est = await estimate(db, c);
+  for (const r of await untouchedLaunched(db, c)) {
+    await db.query(`update titles set description=$2, counterparty_id=$3, category_id=$4, cost_center_id=$5, amount=$6, updated_at=now(), version=version+1 where id=$1`,
+      [r.title_id, titleText(c, r.due_date), c.counterparty_id, c.category_id, c.cost_center_id, Math.max(est.amount, 0.01)]);
+    await db.query('update recurring_occurrences set estimated_amount=$2, estimate_explain=$3 where id=$1 and not estimate_manual', [r.occ_id, est.amount, est.explain]);
+  }
 }
 
 /** Valor real chegou: guarda ao lado do estimado, ajusta o título (se ainda não pago) e avisa se fugiu da tolerância. */
