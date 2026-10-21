@@ -31,7 +31,7 @@ Lançamento: `{ external_id: "<id do lançamento no RUSTEN>", customer_external_
   - `ajuste`: + perdoa fiado (reduz as contas em aberto, sem dinheiro); − aumenta o débito (nova conta a receber).
 - `result`: `applied` | `duplicate` (já recebido) | `error` (`error.code`: `member_not_linked`, `invalid`…). Enviar o membro antes da conta.
 ### `GET {u}/payments?after=<cursor>` → `{ items: [{ cursor, type: "pagamento"|"estorno", customer_external_id, amount_cents, paid_at, note }], next_cursor }`
-Pagamentos (e estornos deles) registrados **no CIFREN** em contas de fiado vindas do RUSTEN. O RUSTEN grava como
+Pagamentos (e estornos deles, com `reverses_cursor` = cursor do pagamento estornado) registrados **no CIFREN** em contas de fiado vindas do RUSTEN. O RUSTEN grava como
 `pagamento_fiado` (sem caixa, `reason: "Recebido no CIFREN"`, `idempotency_key: "cifren:<cursor>"`) — e esses lançamentos NÃO voltam para o CIFREN.
 Baixas que o próprio RUSTEN mandou (`pagamento_fiado`) não aparecem aqui.
 

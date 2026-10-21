@@ -58,41 +58,49 @@ test('conta: fiado vira conta a receber, pagamento baixa, crédito entra no caix
   ]);
   assert.deepEqual(r.data.items.map((x) => x.result), ['applied', 'applied', 'applied', 'applied', 'applied'], JSON.stringify(r.data));
   assert.equal((await send([{ external_id: '1', customer_external_id: '41', kind: 'fiado', amount_cents: -4590, created_at: now }])).data.items[0].result, 'duplicate');
+  const openFiado = async () => (await A.get('/api/titles?kind=receber&status=todos')).data.items
+    .filter((t) => t.source === 'rusten' && /^(Fiado|Ajuste de saldo) RUSTEN/.test(t.description) && ['aberto', 'parcial'].includes(t.status));
+  const sumOpen = async () => Math.round((await openFiado()).reduce((x, t) => x + t.open_amount, 0) * 100) / 100;
   const rec = (await A.get('/api/titles?kind=receber&status=todos')).data.items.filter((t) => t.source === 'rusten');
   const fiados = rec.filter((t) => /^Fiado RUSTEN/.test(t.description));
   assert.equal(fiados.length, 2);
-  assert.equal(fiados.find((t) => t.amount === 45.9).status, 'pago');
-  assert.equal(fiados.find((t) => t.amount === 20).open_amount, 15.9);
   const due = fiados[0].due_date; const exp = new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10);
   assert.ok(Math.abs(Date.parse(due) - Date.parse(exp)) <= 86400000 * 1.1, 'vencimento = data + prazo configurado (10 dias)');
+  // regra de ouro: fiado em aberto no CIFREN = débito no RUSTEN (aqui o cliente ficou com crédito de 4,10)
+  assert.equal(await sumOpen(), 0);
   assert.ok(rec.some((t) => /^Crédito antecipado RUSTEN/.test(t.description) && t.status === 'pago'));
   const acc = (await A.get('/api/accounts')).data.items.find((a) => a.name === 'RUSTEN (recebimentos)');
-  assert.equal(acc.balance, 80);
+  assert.equal(acc.balance, 80, 'pagamento 50 + crédito 30 entraram no caixa');
   const m = (await A.get(`/api/members/${ctx.member}`)).data;
-  assert.equal(m.account.balance, 4.1);
-  // estorno do pagamento: volta a dívida; estorno do fiado: some a conta
+  assert.equal(m.account.balance, 4.1); assert.equal(m.account.credit, 4.1);
+  // estorno do pagamento e do 2º fiado: saldo -25,90
   r = await send([{ external_id: '6', customer_external_id: '41', kind: 'estorno', amount_cents: -5000, reverses_external_id: '3', created_at: now },
     { external_id: '7', customer_external_id: '41', kind: 'estorno', amount_cents: 2000, reverses_external_id: '2', created_at: now }]);
   assert.deepEqual(r.data.items.map((x) => x.result), ['applied', 'applied']);
-  const after2 = (await A.get('/api/titles?kind=receber&status=todos')).data.items.filter((t) => /^Fiado RUSTEN/.test(t.description));
-  assert.equal(after2.find((t) => t.amount === 45.9).status, 'aberto');
-  assert.equal(after2.find((t) => t.amount === 20).status, 'cancelado');
-  // perdão (ajuste +) reduz o fiado
+  assert.equal(await sumOpen(), 25.9);
+  assert.equal((await A.get('/api/accounts')).data.items.find((a) => a.name === 'RUSTEN (recebimentos)').balance, 30, 'pagamento estornado saiu do caixa');
+  // perdão (ajuste +5,90): saldo -20
   await send([{ external_id: '8', customer_external_id: '41', kind: 'ajuste', amount_cents: 590, reason: 'desconto', created_at: now }]);
-  const t45 = (await A.get('/api/titles?kind=receber&status=todos')).data.items.find((t) => /^Fiado RUSTEN/.test(t.description) && t.status === 'aberto');
-  assert.equal(t45.amount, 40); ctx.fiado = t45.id;
+  assert.equal(await sumOpen(), 20);
+  // novo fiado com o cliente devendo: soma
+  await send([{ external_id: '9', customer_external_id: '41', kind: 'fiado', amount_cents: -1000, created_at: now }]);
+  assert.equal(await sumOpen(), 30);
+  assert.equal((await A.get(`/api/members/${ctx.member}`)).data.account.balance, -30);
+  ctx.fiado = (await openFiado())[0].id;
 });
 
 test('pagamento feito no CIFREN volta para o RUSTEN; estorno do que veio do RUSTEN é bloqueado aqui', async () => {
   const acc = (await A.get('/api/accounts')).data.items[0].id;
-  assert.equal((await A.post(`/api/titles/${ctx.fiado}/settle`, { account_id: acc, paid_at: day(), amount: 40, method: 'pix' })).status, 200);
+  const open = (await A.get(`/api/titles/${ctx.fiado}`)).data.open_amount;
+  assert.equal((await A.post(`/api/titles/${ctx.fiado}/settle`, { account_id: acc, paid_at: day(), amount: open, method: 'pix' })).status, 200);
   let p = await api('/payments?after=0');
-  assert.equal(p.data.items.length, 1); assert.equal(p.data.items[0].type, 'pagamento'); assert.equal(p.data.items[0].amount_cents, 4000); assert.equal(p.data.items[0].customer_external_id, '41');
+  assert.equal(p.data.items.length, 1); assert.equal(p.data.items[0].type, 'pagamento'); assert.equal(p.data.items[0].amount_cents, Math.round(open * 100)); assert.equal(p.data.items[0].customer_external_id, '41');
+  assert.equal((await A.get(`/api/members/${ctx.member}`)).data.account.balance, Math.round((-30 + open) * 100) / 100, 'o espelho já conta o recebimento');
   const t = (await A.get(`/api/titles/${ctx.fiado}`)).data;
-  const mine = t.settlements.find((s) => Number(s.amount) === 40);
+  const mine = t.settlements.find((s) => Number(s.amount) === open);
   assert.equal((await A.post(`/api/settlements/${mine.id}/reverse`, { reason: 'errado' })).status, 200);
   p = await api(`/payments?after=${p.data.next_cursor}`);
-  assert.equal(p.data.items[0].type, 'estorno');
+  assert.equal(p.data.items[0].type, 'estorno'); assert.ok(p.data.items[0].reverses_cursor);
   const fromRusten = (await A.get('/api/titles?kind=receber&status=todos')).data.items.find((x) => x.status === 'pago' && /^Crédito antecipado/.test(x.description));
   const st = (await A.get(`/api/titles/${fromRusten.id}`)).data.settlements[0];
   assert.equal((await A.post(`/api/settlements/${st.id}/reverse`, { reason: 'teste' })).status, 409);

@@ -109,8 +109,13 @@ export async function applyEntry(db, key, it) {
   const reason = (it.reason || '').slice(0, 200);
   let titleId = null; let settlements = [];
   const fiadoCat = () => category(db, 'Consumo no fiado (RUSTEN)', 'receita_bruta');
-  const addDebt = async (label) => {
-    const t = await newReceivable(db, m, { description: `${label} — ${m.name}${reason ? ` (${reason})` : ''}`, amount: abs, due: new Date(Date.parse(`${day}T12:00:00Z`) + Number(s.fiado_due_days || 0) * 86400000).toISOString().slice(0, 10),
+  // saldo da conta antes deste lançamento (positivo = crédito do cliente)
+  const before = Number((await db.one('select coalesce(sum(amount),0) as b from member_account where member_id=$1', [m.id])).b);
+  // débito novo: a parte coberta pelo crédito do cliente já foi recebida (no crédito); só o que passa vira conta a receber
+  const addDebt = async (label, value = abs) => {
+    const debt = fromCents(toCents(value) - Math.min(toCents(value), Math.max(0, toCents(before))));
+    if (debt <= 0) return;
+    const t = await newReceivable(db, m, { description: `${label} — ${m.name}${reason ? ` (${reason})` : ''}`, amount: debt, due: new Date(Date.parse(`${day}T12:00:00Z`) + Number(s.fiado_due_days || 0) * 86400000).toISOString().slice(0, 10),
       competence: `${day.slice(0, 7)}-01`, externalId: `acc:${it.external_id}`, categoryId: await fiadoCat() });
     titleId = t.id;
   };
@@ -120,7 +125,7 @@ export async function applyEntry(db, key, it) {
       externalId: `cred:${it.external_id}`, categoryId: await category(db, 'Crédito antecipado de clientes (RUSTEN)', 'outras_receitas') });
     titleId = t.id; settlements.push(await settle(db, t, acc, value, day, 'Crédito recebido no RUSTEN'));
   };
-  const pay = async (value) => {
+  const pay = async (value, excessLabel = 'Pagamento acima do fiado (vira crédito)') => {
     const acc = await cashAccount(db, s, m.company_id);
     let rest = toCents(value);
     for (const t of await openFiado(db, m.id)) {
@@ -128,13 +133,14 @@ export async function applyEntry(db, key, it) {
       const take = Math.min(toCents(t.open), rest); if (take <= 0) continue;
       settlements.push(await settle(db, t, acc, fromCents(take), day, 'Pagamento de fiado recebido no RUSTEN')); rest -= take;
     }
-    if (rest > 0) await addCredit(fromCents(rest), 'Pagamento acima do fiado (vira crédito)');
+    if (rest > 0) await addCredit(fromCents(rest), excessLabel);
   };
 
   switch (it.kind) {
     case 'fiado': if (amount < 0) await addDebt('Fiado RUSTEN'); break;
     case 'pagamento_fiado': if (amount > 0) await pay(abs); break;
-    case 'credito': if (amount > 0) await addCredit(abs, 'Crédito antecipado RUSTEN'); break;
+    // crédito com fiado em aberto quita o fiado (como no RUSTEN, que soma tudo num saldo só); a sobra fica como crédito
+    case 'credito': if (amount > 0) await pay(abs, 'Crédito antecipado RUSTEN'); break;
     case 'uso_credito': break; // o dinheiro já entrou no crédito; só o saldo muda
     case 'ajuste':
       if (amount < 0) await addDebt('Ajuste de débito RUSTEN');
@@ -164,7 +170,24 @@ export async function applyEntry(db, key, it) {
   await db.query(`insert into member_account (org_id, member_id, source, external_id, kind, amount, reverses_external_id, reason, occurred_at, title_id, settlement_ids)
       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
   [db.orgId, m.id, SRC, it.external_id, it.kind, amount, it.reverses_external_id || null, reason || null, it.created_at || new Date().toISOString(), titleId, settlements]);
+  await rebalance(db, m, fromCents(toCents(before) + toCents(amount)), it.external_id, day, s);
   return { result: 'applied' };
+}
+
+/**
+ * Garante a regra de ouro: o fiado em aberto no CIFREN é igual ao débito do cliente no RUSTEN (que soma tudo num saldo só).
+ * Sobrou conta em aberto (ex.: crédito cobriu um fiado estornado) → reduz as mais antigas; faltou → conta "Ajuste de saldo RUSTEN".
+ */
+async function rebalance(db, m, balance, ref, day, s) {
+  const target = Math.max(0, -toCents(balance));
+  const open = await openFiado(db, m.id);
+  const total = open.reduce((a, t) => a + toCents(t.open), 0);
+  if (total > target) await forgive(db, open, fromCents(total - target), 'Acerto com o saldo do RUSTEN (crédito do cliente)');
+  else if (total < target) {
+    await newReceivable(db, m, { description: `Ajuste de saldo RUSTEN — ${m.name}`, amount: fromCents(target - total),
+      due: new Date(Date.parse(`${day}T12:00:00Z`) + Number(s.fiado_due_days || 0) * 86400000).toISOString().slice(0, 10), competence: `${day.slice(0, 7)}-01`,
+      externalId: `acc:ajuste:${ref}`, categoryId: await category(db, 'Consumo no fiado (RUSTEN)', 'receita_bruta') });
+  }
 }
 
 /** Saldo da conta espelhada (positivo = crédito do cliente; negativo = fiado). */
@@ -180,7 +203,12 @@ export async function feedFromSettlement(db, settlementId, type) {
   const s = await db.one(`select s.id, s.amount, s.paid_at, s.origin, t.source, t.external_id, t.member_id, m.external_id as cust
       from settlements s join titles t on t.id=s.title_id left join members m on m.id=t.member_id where s.id=$1`, [settlementId]);
   if (!s || s.source !== 'rusten' || !String(s.external_id || '').startsWith('acc:') || s.origin === 'integracao' || !s.cust) return;
-  await db.query(`insert into integration_feed (org_id, system, type, member_id, customer_external_id, amount, paid_at, settlement_id, note)
-      values ($1,'rusten',$2,$3,$4,$5,$6,$7,$8)`,
+  const f = await db.one(`insert into integration_feed (org_id, system, type, member_id, customer_external_id, amount, paid_at, settlement_id, note)
+      values ($1,'rusten',$2,$3,$4,$5,$6,$7,$8) returning id`,
   [db.orgId, type, s.member_id, s.cust, s.amount, s.paid_at, s.id, type === 'pagamento' ? 'Recebido no CIFREN' : 'Estorno de recebimento no CIFREN']);
+  // o espelho da conta já reflete o que o RUSTEN vai lançar
+  await db.query(`insert into member_account (org_id, member_id, source, external_id, kind, amount, reason, occurred_at, settlement_ids)
+      values ($1,$2,'rusten',$3,$4,$5,$6,now(),$7)`,
+  [db.orgId, s.member_id, `cifren:${f.id}`, type === 'pagamento' ? 'pagamento_fiado' : 'estorno', type === 'pagamento' ? Number(s.amount) : -Number(s.amount),
+    type === 'pagamento' ? 'Recebido no CIFREN' : 'Estorno de recebimento no CIFREN', [s.id]]);
 }
