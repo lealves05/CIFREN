@@ -80,3 +80,21 @@ test('ficha do associado: Mensalidades mostra só mensalidades (não o crédito,
   assert.ok(!m.fees.some((f) => /Crédito|Uso do crédito/.test(f.description || '')));
   assert.ok(!m.next_fee || m.next_fee.amount <= 50);
 });
+
+test('inadimplência conferida com o RUSTEN: crédito cobre a mensalidade, quitar pelo relatório e "contas que eu devo" sem o saldo de crédito', async () => {
+  const pagar = (await A.get('/api/reports/aging?kind=pagar')).data;
+  assert.equal(pagar.buckets.reduce((a, b) => a + b.n, 0), 0, 'o saldo de crédito do associado não é dívida');
+  const fee = (await A.get(`/api/titles/${ctx.feeId}`)).data;
+  const late = fee.due_date < today();
+  const r = (await A.get('/api/reports/aging?kind=receber')).data;
+  if (late) {
+    const me = r.top.find((t) => t.member_id === ctx.member);
+    assert.ok(me, JSON.stringify(r.top));
+    assert.equal(me.rusten, true); assert.equal(me.fees, 50); assert.equal(me.credit, 120); assert.equal(me.covered, 50); assert.equal(me.net, 0);
+    assert.equal(r.rusten.covered_by_credit, 50);
+  }
+  const p = await A.post(`/api/members/${ctx.member}/pay-with-credit`, {});
+  assert.equal(p.status, 200, JSON.stringify(p.data)); assert.equal(p.data.paid, 50); assert.equal(p.data.credit_left, 70);
+  assert.equal((await A.get(`/api/titles/${ctx.feeId}`)).data.status, 'pago');
+  assert.equal((await A.post(`/api/members/${ctx.member}/pay-with-credit`, {})).status, 409, 'nada mais em aberto');
+});

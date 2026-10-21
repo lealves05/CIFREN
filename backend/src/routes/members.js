@@ -7,6 +7,7 @@ import { HttpError, parse, notFound, uuidParam, isUuid, today, likeEsc, round2 }
 import { need, can, assertCompany, companyAllowed } from '../auth.js';
 import { audit } from '../audit.js';
 import { settleTitle } from './titles.js';
+import { rustenCredit } from '../lib/rusten.js';
 import { smtpConfig } from './settings.js';
 import { maskEmail, maskPhone, maskDoc } from './cadastros.js';
 import {
@@ -352,6 +353,31 @@ members.post('/:id/generate', need('associados.gerenciar'), async (req, res) => 
 });
 
 // pagamento de uma mensalidade (baixa da conta a receber)
+/** Quita as mensalidades em aberto do associado (as mais antigas primeiro) com o crédito que ele tem no RUSTEN, até o crédito acabar. */
+members.post('/:id/pay-with-credit', need('financeiro.titulos.baixar'), async (req, res) => {
+  const out = await orgTx(req.orgId, async (db) => {
+    const m = await loadMember(db, req, req.params.id, true);
+    const rc = await rustenCredit(db, m.id);
+    if (!rc) throw new HttpError(409, 'Este associado não está ligado ao RUSTEN (ou a integração está desconectada).');
+    let credit = Math.round(rc.credit * 100);
+    if (credit <= 0) throw new HttpError(409, `${m.name} não tem crédito no RUSTEN.`, { code: 'CREDIT_LOW' });
+    const fees = await db.all(`select t.*, round(t.amount - coalesce((select sum(s.amount) from settlements s where s.title_id=t.id and s.reversed_at is null),0),2) as open
+        from titles t where t.member_id=$1 and t.source='mensalidade' and t.status in ('aberto','parcial') and coalesce(t.approval_status,'aprovado')='aprovado'
+        order by t.due_date, t.created_at`, [m.id]);
+    let paid = 0; let n = 0;
+    for (const t of fees) {
+      if (credit <= 0) break;
+      const v = Math.min(Math.round(Number(t.open) * 100), credit);
+      if (v <= 0) continue;
+      await settleTitle(db, req, t, { method: 'credito_rusten', paid_at: today(), amount: v / 100, interest: 0, fine: 0, discount: 0 });
+      credit -= v; paid += v; n += 1;
+    }
+    if (!n) throw new HttpError(409, `${m.name} não tem mensalidade em aberto.`);
+    return { ok: true, paid: paid / 100, fees: n, credit_left: credit / 100 };
+  });
+  res.json(out);
+});
+
 members.post('/fees/:titleId/pay', need('financeiro.titulos.baixar'), async (req, res) => {
   const d = parse(z.object({ account_id: z.string().refine(isUuid, 'escolha a conta'), paid_at: dateStr, amount: z.coerce.number().positive().optional(),
     method: z.enum(['pix', 'boleto', 'dinheiro', 'cartao', 'transferencia', 'outro']).default('pix'), interest: z.coerce.number().min(0).default(0), discount: z.coerce.number().min(0).default(0) }), req.body);

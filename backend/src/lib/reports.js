@@ -2,6 +2,7 @@
 // Premissas sempre explícitas. Ocorrência prevista de recorrência só entra no previsto (nunca no realizado).
 import { today, toCents, fromCents } from '../util.js';
 import { BALANCE_SQL } from '../routes/cadastros.js';
+import { rustenCredit } from './rusten.js';
 
 const PAID = `coalesce((select sum(s.amount) from settlements s where s.title_id=t.id and s.reversed_at is null), 0)`;
 const CASH = '(s.amount + s.interest + s.fine - s.discount)';
@@ -106,16 +107,43 @@ export async function costCenters(db, { from, to, scope }) {
 
 export async function aging(db, { kind, scope }) {
   const day = today();
-  const rows = await db.all(`select t.due_date, t.amount - ${PAID} as open, cp.name as cp from titles t left join counterparties cp on cp.id=t.counterparty_id
-      where t.kind=$2 and t.status in ('aberto','parcial') and ($1::uuid[] is null or t.company_id = any($1::uuid[]))`, [scope, kind]);
+  // fora: o saldo de crédito do associado e o uso do crédito (não são dívidas, acompanham o RUSTEN)
+  const rows = await db.all(`select t.due_date, t.amount - ${PAID} as open, t.counterparty_id, cp.name as cp, t.member_id, t.source, t.external_id
+      from titles t left join counterparties cp on cp.id=t.counterparty_id
+      where t.kind=$2 and t.status in ('aberto','parcial') and ($1::uuid[] is null or t.company_id = any($1::uuid[]))
+        and not (t.source='rusten' and (t.external_id like 'credito:%' or t.external_id like 'usocred:%'))`, [scope, kind]);
   const b = [['a vencer', -1e9, 0], ['1–30 dias', 1, 30], ['31–60 dias', 31, 60], ['61–90 dias', 61, 90], ['mais de 90 dias', 91, 1e9]].map(([label, a, z]) => ({ label, a, z, amount: 0, n: 0 }));
   const top = new Map();
   for (const r of rows) {
     const late = Math.round((Date.parse(day) - Date.parse(r.due_date)) / 86400000);
-    const k = b.find((x) => (x.a === -1e9 ? late <= 0 : late >= x.a && late <= x.z)); k.amount += toCents(r.open); k.n++;
-    if (late > 0) { const key = r.cp || 'Sem cliente/fornecedor'; const t = top.get(key) || { counterparty: key, amount: 0, n: 0 }; t.amount += toCents(r.open); t.n++; top.set(key, t); }
+    const v = toCents(r.open);
+    const k = b.find((x) => (x.a === -1e9 ? late <= 0 : late >= x.a && late <= x.z)); k.amount += v; k.n++;
+    if (late > 0) {
+      const key = r.member_id ? `m:${r.member_id}` : r.counterparty_id || r.cp || 'sem';
+      const t = top.get(key) || { counterparty: r.cp || 'Sem cliente/fornecedor', member_id: r.member_id || null, amount: 0, n: 0, fees: 0, fiado: 0 };
+      t.amount += v; t.n++;
+      if (r.source === 'mensalidade') t.fees += v;
+      else if (r.source === 'rusten' && String(r.external_id || '').startsWith('acc:')) t.fiado += v;
+      top.set(key, t);
+    }
   }
+  const list = [...top.values()].sort((x, y) => y.amount - x.amount);
+  // associados ligados ao RUSTEN: crédito que ele tem lá e quanto da dívida esse crédito já cobre
+  let covered = 0; let fiado = 0; let withCredit = 0;
+  for (const t of list) {
+    fiado += t.fiado;
+    if (kind !== 'receber' || !t.member_id) continue;
+    const rc = await rustenCredit(db, t.member_id).catch(() => null);
+    if (!rc) continue;
+    t.rusten = true;
+    t.credit = toCents(rc.credit);
+    t.covered = Math.min(t.credit, t.fees);
+    if (t.covered > 0) { covered += t.covered; withCredit += 1; }
+  }
+  const out = (t) => ({ counterparty: t.counterparty, member_id: t.member_id, amount: fromCents(t.amount), n: t.n, fees: fromCents(t.fees), fiado: fromCents(t.fiado),
+    rusten: !!t.rusten, credit: t.rusten ? fromCents(t.credit) : null, covered: t.rusten ? fromCents(t.covered) : null, net: fromCents(t.amount - (t.covered || 0)) });
   return { buckets: b.map(({ label, amount, n }) => ({ label, amount: fromCents(amount), n })),
-    top: [...top.values()].sort((x, y) => y.amount - x.amount).slice(0, 10).map((t) => ({ ...t, amount: fromCents(t.amount) })) };
+    top: list.slice(0, 20).map(out),
+    rusten: kind === 'receber' ? { fiado_overdue: fromCents(fiado), covered_by_credit: fromCents(covered), members_with_credit: withCredit } : null };
 }
 export { monthsBetween };
