@@ -231,10 +231,11 @@ lorlerApi.get('/payments', async (req, res) => {
   const k = await bearer(req, res, 'members:write');
   const after = /^\d{1,18}$/.test(String(req.query.after || '')) ? String(req.query.after) : '0';
   const rows = await orgTx(k.org_id, (db) => db.all(`select f.id, f.type, f.customer_external_id, f.amount, f.paid_at, f.note,
-        (select o.id from integration_feed o where o.settlement_id=f.settlement_id and o.type='pagamento' and o.id < f.id order by o.id desc limit 1) as reverses
+        (select o.id from integration_feed o where o.settlement_id=f.settlement_id and o.type=(case when f.type='estorno_uso_credito' then 'uso_credito' else 'pagamento' end)
+           and o.id < f.id order by o.id desc limit 1) as reverses
       from integration_feed f where f.system=$1 and f.id > $2::bigint order by f.id limit 200`, [k.system, after]));
   const items = rows.map((r) => ({ cursor: String(r.id), type: r.type, customer_external_id: r.customer_external_id, amount_cents: Math.round(Number(r.amount) * 100), paid_at: r.paid_at, note: r.note,
-    ...(r.type === 'estorno' && r.reverses ? { reverses_cursor: String(r.reverses) } : {}) }));
+    ...(['estorno', 'estorno_uso_credito'].includes(r.type) && r.reverses ? { reverses_cursor: String(r.reverses) } : {}) }));
   res.json({ items, next_cursor: items.length ? items.at(-1).cursor : after });
 });
 export { accountOf };

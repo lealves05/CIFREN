@@ -61,16 +61,16 @@ members.get('/', need('associados.visualizar', 'associados.gerenciar'), async (r
   if (['ativo', 'suspenso', 'encerrado'].includes(req.query.status)) { p.push(req.query.status); w.push(`m.status=$${p.length}`); }
   else if (req.query.status !== 'todos') w.push("m.status <> 'encerrado'");
   if (req.query.q) { p.push(`%${likeEsc(String(req.query.q).slice(0, 80))}%`); w.push(`(m.name ilike $${p.length} or m.email ilike $${p.length} or m.whatsapp like $${p.length})`); }
-  if (req.query.situacao === 'atraso') w.push(`exists(select 1 from titles t where t.member_id=m.id and t.status in ('aberto','parcial') and t.due_date < $2)`);
-  if (req.query.situacao === 'em_dia') w.push(`not exists(select 1 from titles t where t.member_id=m.id and t.status in ('aberto','parcial') and t.due_date < $2)`);
+  if (req.query.situacao === 'atraso') w.push(`exists(select 1 from titles t where t.member_id=m.id and t.source='mensalidade' and t.status in ('aberto','parcial') and t.due_date < $2)`);
+  if (req.query.situacao === 'em_dia') w.push(`not exists(select 1 from titles t where t.member_id=m.id and t.source='mensalidade' and t.status in ('aberto','parcial') and t.due_date < $2)`);
   const items = await orgTx(req.orgId, async (db) => {
     const table = await feeTable(db);
     const rows = await db.all(`select m.*, json_build_object('id', co.id, 'name', co.name) as company,
         case when c.id is null then null else json_build_object('id', c.id, 'name', c.name) end as category,
         (select json_build_object('count', count(*), 'amount', coalesce(round(sum(t.amount - ${PAID_T}),2),0), 'oldest_due', min(t.due_date))
-           from titles t where t.member_id=m.id and t.status in ('aberto','parcial') and t.due_date < $2) as overdue,
+           from titles t where t.member_id=m.id and t.source='mensalidade' and t.status in ('aberto','parcial') and t.due_date < $2) as overdue,
         (select json_build_object('id', t.id, 'due_date', t.due_date, 'amount', round(t.amount - ${PAID_T},2)) from titles t
-           where t.member_id=m.id and t.status in ('aberto','parcial') and t.due_date >= $2 order by t.due_date limit 1) as next_fee,
+           where t.member_id=m.id and t.source='mensalidade' and t.status in ('aberto','parcial') and t.due_date >= $2 order by t.due_date limit 1) as next_fee,
         (select max(s.paid_at) from settlements s join titles t on t.id=s.title_id where t.member_id=m.id and s.reversed_at is null) as last_payment
       from members m join companies co on co.id=m.company_id left join categories c on c.id=m.category_id
       where ${w.join(' and ')} order by lower(m.name) limit 2000`, p);
@@ -259,7 +259,7 @@ members.get('/:id', need('associados.visualizar', 'associados.gerenciar'), async
     const cat = m.category_id ? await db.one('select id, name from categories where id=$1', [m.category_id]) : null;
     const fees = await db.all(`select t.id, t.description, t.competence_date, t.due_date, t.amount, t.status, round(${PAID_T},2) as paid,
         (select max(s.paid_at) from settlements s where s.title_id=t.id and s.reversed_at is null) as paid_at
-      from titles t where t.member_id=$1 order by t.due_date desc limit 120`, [m.id]);
+      from titles t where t.member_id=$1 and t.source='mensalidade' order by t.due_date desc limit 120`, [m.id]);
     const day = today();
     const reminders = await db.all('select id, title_id, channel, kind, step, status, error, sent_by_name, sent_at from member_reminders where member_id=$1 order by sent_at desc limit 60', [m.id]);
     const table = await feeTable(db);
@@ -295,7 +295,7 @@ members.put('/:id', need('associados.gerenciar'), async (req, res) => {
     if (has('monthly_fee') && (m.monthly_fee == null ? null : Number(m.monthly_fee)) !== d.monthly_fee) changed += await recalcOpen(db, nextMonth(), m.id);
     // dia do vencimento e nome: nas mensalidades em aberto e sem pagamento (se pedido)
     if (d.apply_to_open && (has('due_day') || has('name'))) {
-      const open = await db.all(`select t.id, t.competence_date from titles t where t.member_id=$1 and t.status='aberto'
+      const open = await db.all(`select t.id, t.competence_date from titles t where t.member_id=$1 and t.source='mensalidade' and t.status='aberto'
           and not exists(select 1 from settlements s where s.title_id=t.id and s.reversed_at is null)`, [m.id]);
       for (const t of open) {
         const month = String(t.competence_date).slice(0, 10);
@@ -321,7 +321,7 @@ members.post('/:id/status', need('associados.gerenciar'), async (req, res) => {
     let cancelled = 0;
     if (d.status === 'encerrado' && d.cancel_future) {
       const x = await db.query(`update titles t set status='cancelado', cancel_reason='Associado encerrado', cancelled_at=now(), updated_at=now(), version=version+1
-          where t.member_id=$1 and t.status='aberto' and t.competence_date > $2 and not exists(select 1 from settlements s where s.title_id=t.id and s.reversed_at is null)`, [m.id, end]);
+          where t.member_id=$1 and t.source='mensalidade' and t.status='aberto' and t.competence_date > $2 and not exists(select 1 from settlements s where s.title_id=t.id and s.reversed_at is null)`, [m.id, end]);
       cancelled = x.rowCount;
     }
     if (d.status === 'ativo') await generateFor(db, r, req.user.id);

@@ -11,7 +11,7 @@ import { BALANCE_SQL } from './cadastros.js';
 import { needsApproval, requestApproval, assertApprovedForPayment } from '../lib/approvals.js';
 import { onTitleSettled } from '../lib/recurring.js';
 import { insightsFor } from '../lib/insights.js';
-import { feedFromSettlement } from '../lib/rusten.js';
+import { feedFromSettlement, payWithCredit, reverseCreditUse, rustenCredit } from '../lib/rusten.js';
 
 const actor = (req) => ({ id: req.user.id, name: req.user.name });
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'data inválida (use AAAA-MM-DD)')
@@ -177,9 +177,11 @@ titles.get('/:id', need('financeiro.titulos.visualizar'), async (req, res) => {
     const settlements = await db.all(`select s.id, json_build_object('id', a.id, 'name', a.name) as account, s.paid_at, s.amount, s.interest, s.fine, s.discount,
         s.method, s.notes, s.reversed_at, s.reverse_reason, s.created_at
       from settlements s join bank_accounts a on a.id=s.account_id where s.title_id=$1 order by s.created_at`, [id]);
-    const raw = await db.one('select counterparty_id, category_id, cost_center_id, company_id from titles where id=$1', [id]);
+    const raw = await db.one('select counterparty_id, category_id, cost_center_id, company_id, member_id from titles where id=$1', [id]);
     const documents = await db.all(`select d.id, d.filename, d.kind from document_links l join documents d on d.id=l.document_id where l.entity='title' and l.entity_id=$1`, [id]);
-    return { ...shape(t, day), ...raw, settlements, documents };
+    // associado do RUSTEN: crédito disponível para pagar esta conta (forma de pagamento "Crédito do RUSTEN")
+    const rc = t.kind === 'receber' && raw.member_id ? await rustenCredit(db, raw.member_id) : null;
+    return { ...shape(t, day), ...raw, settlements, documents, rusten_credit: rc ? rc.credit : null };
   });
   res.json(out);
 });
@@ -226,10 +228,10 @@ titles.put('/:id', need('financeiro.titulos.editar'), async (req, res) => {
 });
 
 const settleSchema = z.object({
-  account_id: z.string().refine(isUuid, 'conta inválida'),
+  account_id: z.string().refine(isUuid, 'conta inválida').optional(),
   paid_at: dateStr, amount: positive,
   interest: nonNeg.default(0), fine: nonNeg.default(0), discount: nonNeg.default(0),
-  method: z.enum(['pix', 'boleto', 'dinheiro', 'cartao', 'transferencia', 'outro']).default('outro'),
+  method: z.enum(['pix', 'boleto', 'dinheiro', 'cartao', 'transferencia', 'outro', 'credito_rusten']).default('outro'),
   notes: optText(500),
 });
 titles.post('/:id/settle', need('financeiro.titulos.baixar'), async (req, res) => {
@@ -251,6 +253,8 @@ export async function settleTitle(db, req, t, d, origin = 'manual') {
       throw new HttpError(409, 'Este é o saldo de crédito do associado no RUSTEN: ele diminui sozinho quando o associado consome. Para devolver dinheiro, lance no RUSTEN.');
     }
     assertApprovedForPayment(t);
+    if (d.method === 'credito_rusten') return payWithCredit(db, req, t, d);
+    if (!d.account_id) throw new HttpError(400, 'Escolha de qual conta saiu (ou entrou) o dinheiro.');
     const acc = await db.one('select company_id, active, opening_date, name from bank_accounts where id=$1', [d.account_id]);
     if (!acc || !acc.active) throw new HttpError(400, 'Conta não encontrada ou arquivada.');
     if (acc.company_id !== t.company_id) throw new HttpError(400, 'Use uma conta da mesma empresa do título.');
@@ -293,8 +297,9 @@ settlements.post('/:id/reverse', need('financeiro.titulos.baixar'), async (req, 
   const id = uuidParam(req.params.id);
   const d = parse(z.object({ reason: z.string().trim().min(3, 'informe o motivo').max(300) }), req.body);
   const out = await orgTx(req.orgId, async (db) => {
-    const s = await db.one('select title_id, amount, reversed_at from settlements where id=$1', [id]);
+    const s = await db.one('select title_id, amount, reversed_at, method, origin from settlements where id=$1', [id]);
     if (!s) throw notFound('Baixa não encontrada.');
+    if (s.method === 'credito_rusten' && s.origin === 'integracao') throw new HttpError(409, 'Esta é a saída que equilibra um pagamento com crédito. Estorne a baixa da conta que foi paga com o crédito.');
     const t = await loadTitle(db, req, s.title_id, true);
     const again = await db.one('select reversed_at from settlements where id=$1 for update', [id]);
     if (again.reversed_at) throw new HttpError(409, 'Esta baixa já foi estornada.');
@@ -304,6 +309,7 @@ settlements.post('/:id/reverse', need('financeiro.titulos.baixar'), async (req, 
     await db.query('update settlements set reversed_at=now(), reversed_by=$2, reverse_reason=$3 where id=$1', [id, req.user.id, d.reason]);
     const status = await refreshStatus(db, s.title_id);
     if (t.source === 'rusten') await feedFromSettlement(db, id, 'estorno');
+    if (s.method === 'credito_rusten') await reverseCreditUse(db, id, d.reason); // o crédito volta para o associado no RUSTEN
     await audit(db, { actor: actor(req), req, action: 'baixa.estornada', entity: 'title', entityId: s.title_id,
       summary: `${t.description}: estorno de R$ ${Number(s.amount).toFixed(2)} — ${d.reason}`, data: { settlement_id: id } });
     return { ok: true, status };

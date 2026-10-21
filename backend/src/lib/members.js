@@ -173,7 +173,7 @@ export async function sendReminder(db, { member, company, titles, s, channel, ki
 /** Mensalidades em aberto de um associado (as vencidas primeiro). */
 export async function openFeesOf(db, memberId, onlyOverdue = true) {
   return db.all(`select t.id, t.due_date, t.competence_date, t.amount, round(t.amount - ${PAID_T},2) as open from titles t
-      where t.member_id=$1 and t.status in ('aberto','parcial') ${onlyOverdue ? 'and t.due_date < $2' : 'and $2::date is not null'} order by t.due_date`, [memberId, today()]);
+      where t.member_id=$1 and t.source='mensalidade' and t.status in ('aberto','parcial') ${onlyOverdue ? 'and t.due_date < $2' : 'and $2::date is not null'} order by t.due_date`, [memberId, today()]);
 }
 
 /** Rotina: gera mensalidades e manda os avisos automáticos (dentro do horário configurado). */
@@ -230,7 +230,7 @@ export async function overdueReport(db, scope = null) {
         count(t.id)::int as n, round(sum(t.amount - ${PAID_T}),2) as amount, min(t.due_date) as oldest_due,
         array_agg(to_char(coalesce(t.competence_date, t.due_date), 'MM/YYYY') order by t.due_date) as months,
         (select json_build_object('channel', r.channel, 'status', r.status, 'at', r.sent_at) from member_reminders r where r.member_id=m.id order by r.sent_at desc limit 1) as last_reminder
-      from members m join titles t on t.member_id=m.id and t.status in ('aberto','parcial') and t.due_date < $1 join companies co on co.id=m.company_id
+      from members m join titles t on t.member_id=m.id and t.source='mensalidade' and t.status in ('aberto','parcial') and t.due_date < $1 join companies co on co.id=m.company_id
       where ($2::uuid[] is null or m.company_id = any($2::uuid[]))
       group by m.id, co.name order by min(t.due_date), m.name`, [day, scope]);
   const items = rows.map((r) => ({ member: { id: r.id, number: Number(r.number), name: r.name, email: r.email, whatsapp: r.whatsapp, status: r.status, company: r.company },

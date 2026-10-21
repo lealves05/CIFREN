@@ -69,7 +69,7 @@ export const METHODS = [
   { value: 'transferencia', label: 'Transferência' },
   { value: 'outro', label: 'Outro' },
 ];
-export const methodLabel = (v) => METHODS.find((m) => m.value === v)?.label || v || '—';
+export const methodLabel = (v) => (v === 'credito_rusten' ? 'Crédito do RUSTEN' : METHODS.find((m) => m.value === v)?.label || v || '—');
 
 export const ACCOUNT_TYPES = [
   { value: 'banco', label: 'Conta no banco' },

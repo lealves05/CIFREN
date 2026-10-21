@@ -3,6 +3,7 @@
 // conta a receber / baixa / saldo de crédito ligado ao cadastro. Tudo idempotente pelo id do RUSTEN.
 import { HttpError, today, round2, toCents, fromCents } from '../util.js';
 import { refreshStatus, PAID } from '../routes/titles.js';
+import { audit } from '../audit.js';
 import { generateFor, feeCategory, normPhone, fmtPhone } from './members.js';
 
 const SRC = 'rusten';
@@ -243,4 +244,79 @@ export async function feedFromSettlement(db, settlementId, type) {
   const mm = await db.one('select * from members where id=$1', [s.member_id]);
   const b = Number((await db.one('select coalesce(sum(amount),0) as b from member_account where member_id=$1', [s.member_id])).b);
   if (mm) await syncCreditPayable(db, mm, b);
+}
+
+// ---------------- pagar com o crédito do RUSTEN ----------------
+/** Associado ligado ao RUSTEN (com a integração ativa) e o crédito que ele tem lá agora. */
+export async function rustenCredit(db, memberId) {
+  if (!memberId) return null;
+  const m = await db.one("select * from members where id=$1 and source='rusten'", [memberId]);
+  if (!m) return null;
+  const key = await db.one("select * from integration_keys where org_id=$1 and system='rusten' and revoked_at is null order by created_at desc limit 1", [db.orgId]);
+  if (!key) return null;
+  const { credit } = await accountOf(db, m.id);
+  return { member: m, key, credit };
+}
+
+async function offsetCategory(db) {
+  const c = await db.one("select id from categories where lower(name)=lower('Uso de crédito de associados (RUSTEN)') and type='despesa' and active limit 1");
+  if (c) return c.id;
+  return (await db.one("insert into categories (org_id, name, type, dre_group) values ($1,'Uso de crédito de associados (RUSTEN)','despesa','outras_receitas') returning id", [db.orgId])).id;
+}
+
+/** Espelho + retorno ao RUSTEN de um uso (ou estorno de uso) de crédito feito aqui. */
+async function feedCredit(db, m, settlementId, type, amount, paidAt, note) {
+  const f = await db.one(`insert into integration_feed (org_id, system, type, member_id, customer_external_id, amount, paid_at, settlement_id, note)
+      values ($1,'rusten',$2,$3,$4,$5,$6,$7,$8) returning id`, [db.orgId, type, m.id, m.external_id, amount, paidAt, settlementId, note.slice(0, 300)]);
+  await db.query(`insert into member_account (org_id, member_id, source, external_id, kind, amount, reason, occurred_at, settlement_ids)
+      values ($1,$2,'rusten',$3,$4,$5,$6,now(),$7)`,
+  [db.orgId, m.id, `cifren:${f.id}`, type === 'uso_credito' ? 'uso_credito' : 'estorno', type === 'uso_credito' ? -amount : amount, note.slice(0, 200), [settlementId]]);
+  const b = Number((await db.one('select coalesce(sum(amount),0) as b from member_account where member_id=$1', [m.id])).b);
+  await syncCreditPayable(db, m, b);
+}
+
+/**
+ * Baixa de uma conta a receber do associado com o crédito dele no RUSTEN.
+ * O dinheiro já entrou quando o crédito foi lançado no RUSTEN; por isso a baixa entra na conta do RUSTEN e, na mesma conta e dia,
+ * sai o "uso do crédito" (saldo do banco não muda; no DRE o uso abate a receita do crédito antecipado e a mensalidade fica como receita).
+ */
+export async function payWithCredit(db, req, t, d) {
+  if (t.kind !== 'receber') throw new HttpError(400, 'O crédito do RUSTEN só paga contas a receber do associado.');
+  const rc = await rustenCredit(db, t.member_id);
+  if (!rc) throw new HttpError(409, 'Esta conta não é de um associado ligado ao RUSTEN (ou a integração está desconectada).');
+  if (toCents(d.interest) || toCents(d.fine) || toCents(d.discount)) throw new HttpError(400, 'Com o crédito do RUSTEN, pague só o valor da conta (sem juros, multa ou desconto).');
+  if (d.paid_at > today()) throw new HttpError(400, 'A data da baixa não pode ser futura.');
+  const paid = (await db.one('select coalesce(sum(amount),0) as v from settlements where title_id=$1 and reversed_at is null', [t.id])).v;
+  const open = toCents(t.amount) - toCents(paid);
+  if (toCents(d.amount) > open) throw new HttpError(400, `O valor baixado passa do saldo em aberto (R$ ${fromCents(open).toFixed(2)}).`);
+  if (toCents(d.amount) > toCents(rc.credit)) throw new HttpError(409, `${rc.member.name} tem só R$ ${rc.credit.toFixed(2).replace('.', ',')} de crédito no RUSTEN.`, { code: 'CREDIT_LOW' });
+  const acc = await cashAccount(db, settingsOf(rc.key), t.company_id);
+  const note = `Pago com o crédito do associado no RUSTEN${d.notes ? ` — ${d.notes}` : ''}`;
+  const s = await db.one(`insert into settlements (org_id, title_id, account_id, paid_at, amount, interest, fine, discount, method, notes, created_by, origin)
+      values ($1,$2,$3,$4,$5,0,0,0,'credito_rusten',$6,$7,'manual') returning id`, [db.orgId, t.id, acc, d.paid_at, d.amount, note.slice(0, 500), req?.user?.id || null]);
+  const status = await refreshStatus(db, t.id);
+  // saída que equilibra o caixa: o crédito usado
+  const off = await db.one(`insert into titles (org_id, company_id, kind, description, counterparty_id, category_id, competence_date, due_date, amount, source, external_id, member_id, notes)
+      values ($1,$2,'pagar',$3,$4,$5,$6,$7,$8,'rusten',$9,$10,$11) returning id`,
+  [db.orgId, t.company_id, `Uso do crédito do associado (RUSTEN) — ${t.description}`.slice(0, 200), rc.member.counterparty_id, await offsetCategory(db), `${d.paid_at.slice(0, 7)}-01`, d.paid_at, d.amount,
+    `usocred:${s.id}`, rc.member.id, 'Crédito que o associado já tinha pago no RUSTEN, usado para quitar a conta. Não é dinheiro saindo do banco: equilibra a entrada da conta paga com o crédito.']);
+  await db.query(`insert into settlements (org_id, title_id, account_id, paid_at, amount, interest, fine, discount, method, notes, created_by, origin)
+      values ($1,$2,$3,$4,$5,0,0,0,'credito_rusten','Uso do crédito do associado no RUSTEN',$6,'integracao')`, [db.orgId, off.id, acc, d.paid_at, d.amount, req?.user?.id || null]);
+  await refreshStatus(db, off.id);
+  await feedCredit(db, rc.member, s.id, 'uso_credito', Number(d.amount), d.paid_at, `Pago no CIFREN: ${t.description}`);
+  await audit(db, { actor: req?.user ? { id: req.user.id, name: req.user.name } : { id: null, name: 'Sistema' }, req, action: 'titulo.baixado', entity: 'title', entityId: t.id,
+    summary: `${t.description}: R$ ${Number(d.amount).toFixed(2)} pago com o crédito do RUSTEN (${status})`, data: { settlement_id: s.id, method: 'credito_rusten' } });
+  return { ok: true, status, settlement_id: s.id };
+}
+
+/** Estorno de uma baixa paga com crédito: estorna a saída que equilibrava, cancela essa conta e devolve o crédito no RUSTEN. */
+export async function reverseCreditUse(db, settlementId, reason) {
+  const off = await db.one("select * from titles where source='rusten' and external_id=$1 for update", [`usocred:${settlementId}`]);
+  if (off) {
+    await db.query("update settlements set reversed_at=now(), reverse_reason=$2 where title_id=$1 and reversed_at is null", [off.id, reason]);
+    await db.query("update titles set status='cancelado', cancel_reason=$2, cancelled_at=now(), updated_at=now(), version=version+1 where id=$1", [off.id, `Estorno: ${reason}`.slice(0, 300)]);
+  }
+  const s = await db.one('select s.amount, s.paid_at, t.member_id, t.description from settlements s join titles t on t.id=s.title_id where s.id=$1', [settlementId]);
+  const m = s?.member_id ? await db.one("select * from members where id=$1 and source='rusten'", [s.member_id]) : null;
+  if (m) await feedCredit(db, m, settlementId, 'estorno_uso_credito', Number(s.amount), today(), `Estorno no CIFREN: ${s.description}`);
 }
