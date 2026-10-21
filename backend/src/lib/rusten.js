@@ -188,6 +188,35 @@ async function rebalance(db, m, balance, ref, day, s) {
       due: new Date(Date.parse(`${day}T12:00:00Z`) + Number(s.fiado_due_days || 0) * 86400000).toISOString().slice(0, 10), competence: `${day.slice(0, 7)}-01`,
       externalId: `acc:ajuste:${ref}`, categoryId: await category(db, 'Consumo no fiado (RUSTEN)', 'receita_bruta') });
   }
+  await syncCreditPayable(db, m, balance, day);
+}
+
+/**
+ * Crédito do associado em Contas a pagar: uma conta só por associado ("Crédito do associado (RUSTEN) — nome") com o saldo de crédito
+ * que ele tem no RUSTEN. Diminui quando ele consome; some quando zera. Não é dinheiro a sair: é o que a empresa deve em consumo.
+ */
+export async function syncCreditPayable(db, m, balance, day = today()) {
+  const credit = Math.max(0, toCents(balance));
+  const ext = `credito:${m.id}`;
+  const t = await db.one("select * from titles where source='rusten' and external_id=$1 for update", [ext]);
+  const due = new Date(Date.parse(`${day}T12:00:00Z`) + 365 * 86400000).toISOString().slice(0, 10);
+  if (!t) {
+    if (!credit) return;
+    const cat = await db.one("select id from categories where lower(name)=lower('Crédito de associados (RUSTEN)') and type='despesa' and active limit 1")
+      || await db.one("insert into categories (org_id, name, type, dre_group) values ($1,'Crédito de associados (RUSTEN)','despesa',null) returning id", [db.orgId]);
+    await db.query(`insert into titles (org_id, company_id, kind, description, counterparty_id, category_id, competence_date, due_date, amount, source, external_id, member_id, notes)
+        values ($1,$2,'pagar',$3,$4,$5,$6,$7,$8,'rusten',$9,$10,$11)`,
+    [db.orgId, m.company_id, `Crédito do associado (RUSTEN) — ${m.name}`.slice(0, 200), m.counterparty_id, cat.id, `${day.slice(0, 7)}-01`, due, fromCents(credit), ext, m.id,
+      'Saldo de crédito que o associado tem no RUSTEN (pagou antes de consumir). Não é um pagamento a fazer: diminui sozinho quando ele consome e some quando zera. Para devolver dinheiro, lance no RUSTEN.']);
+    return;
+  }
+  if (!credit) {
+    if (t.status !== 'cancelado') await db.query("update titles set status='cancelado', cancel_reason='Crédito do associado zerado no RUSTEN', cancelled_at=now(), updated_at=now(), version=version+1 where id=$1", [t.id]);
+    return;
+  }
+  if (toCents(t.amount) !== credit || t.status !== 'aberto') {
+    await db.query("update titles set amount=$2, status='aberto', cancel_reason=null, cancelled_at=null, due_date=$3, updated_at=now(), version=version+1 where id=$1", [t.id, fromCents(credit), due]);
+  }
 }
 
 /** Saldo da conta espelhada (positivo = crédito do cliente; negativo = fiado). */
@@ -211,4 +240,7 @@ export async function feedFromSettlement(db, settlementId, type) {
       values ($1,$2,'rusten',$3,$4,$5,$6,now(),$7)`,
   [db.orgId, s.member_id, `cifren:${f.id}`, type === 'pagamento' ? 'pagamento_fiado' : 'estorno', type === 'pagamento' ? Number(s.amount) : -Number(s.amount),
     type === 'pagamento' ? 'Recebido no CIFREN' : 'Estorno de recebimento no CIFREN', [s.id]]);
+  const mm = await db.one('select * from members where id=$1', [s.member_id]);
+  const b = Number((await db.one('select coalesce(sum(amount),0) as b from member_account where member_id=$1', [s.member_id])).b);
+  if (mm) await syncCreditPayable(db, mm, b);
 }

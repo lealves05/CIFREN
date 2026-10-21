@@ -15,7 +15,7 @@ export const STATUS_TABS = [
 
 export const isOpen = (t) => t && (t.status === 'aberto' || t.status === 'parcial');
 export const blockedByApproval = (t) => t && (t.approval_status === 'pendente' || t.approval_status === 'reprovado');
-export const canSettle = (t) => isOpen(t) && Number(t.open_amount) > 0 && !blockedByApproval(t);
+export const canSettle = (t) => isOpen(t) && Number(t.open_amount) > 0 && !blockedByApproval(t) && !t.member_credit;
 
 export const SOURCE_NAME = { orbi: 'ORBI', torven: 'TORVEN', rusten: 'RUSTEN', apolven: 'APOLVEN', cerebro: 'Cérebro', manual: null, documento: 'Documento', conciliacao: 'Conciliação', compra: 'Compras', reembolso: 'Reembolso', recorrente: 'Recorrente' };
 
@@ -28,9 +28,10 @@ export function titleFlags(t) {
   if (t.estimated) out.push({ key: 'est', label: 'Valor estimado', tone: 'warn', title: 'Valor estimado — aguardando a conta chegar' });
   const src = t.source && t.source !== 'manual' ? (SOURCE_NAME[t.source] !== undefined ? SOURCE_NAME[t.source] : String(t.source).toUpperCase()) : null;
   if (src) out.push({ key: 'src', label: `Veio do ${src}`, tone: 'neutral' });
+  if (t.member_credit) out.push({ key: 'cred', label: 'Crédito do associado', tone: 'brand', title: 'Saldo de crédito do associado no RUSTEN: diminui sozinho quando ele consome' });
   return out;
 }
-export const canCancel = (t) => t && t.status === 'aberto' && !Number(t.paid_amount);
+export const canCancel = (t) => t && t.status === 'aberto' && !Number(t.paid_amount) && !t.member_credit;
 
 /** Rótulo e tom do selo de situação. */
 export function statusInfo(t, kind) {

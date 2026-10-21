@@ -27,7 +27,7 @@ const nonNeg = z.coerce.number().finite().min(0).refine((v) => v < 1e13, 'valor 
 export const PAID = `coalesce((select sum(s.amount) from settlements s where s.title_id=t.id and s.reversed_at is null), 0)`;
 const SELECT = `select t.id, t.kind, t.description, t.document_number, t.issue_date, t.competence_date, t.due_date, t.amount, t.status,
     t.installment, t.installments, t.group_id, t.notes, t.cancel_reason, t.version, t.created_at,
-    t.approval_status, t.estimated, t.source,
+    t.approval_status, t.estimated, t.source, (t.source = 'rusten' and t.external_id like 'credito:%') as member_credit,
     (select json_build_object('id', rc.id, 'name', rc.name) from recurring_occurrences ro join recurring_commitments rc on rc.id=ro.commitment_id where ro.id=t.recurring_occurrence_id) as recurring,
     ${PAID} as paid_amount,
     case when cp.id is null then null else json_build_object('id', cp.id, 'name', cp.name) end as counterparty,
@@ -195,6 +195,7 @@ titles.put('/:id', need('financeiro.titulos.editar'), async (req, res) => {
   const d = parse(updateSchema, body);
   const out = await orgTx(req.orgId, async (db) => {
     const t = await loadTitle(db, req, id, true);
+    if (t.source === 'rusten' && String(t.external_id || '').startsWith('credito:')) throw new HttpError(409, 'Saldo de crédito do associado: ele acompanha o RUSTEN sozinho. Ajuste lá, na conta do cliente.');
     if (d.version != null && d.version !== t.version) throw new HttpError(409, 'Este título foi alterado por outra pessoa. Recarregue a tela.', { code: 'VERSION_CONFLICT' });
     if (t.status === 'cancelado') throw new HttpError(409, 'Título cancelado não pode ser alterado.');
     if (d.amount !== undefined && d.amount !== Number(t.amount)) {
@@ -244,6 +245,9 @@ export async function settleTitle(db, req, t, d, origin = 'manual') {
     const id = t.id;
     if (t.status === 'cancelado') throw new HttpError(409, 'Título cancelado não pode receber baixa.');
     if (t.status === 'pago') throw new HttpError(409, 'Este título já está quitado.');
+    if (t.source === 'rusten' && String(t.external_id || '').startsWith('credito:')) {
+      throw new HttpError(409, 'Este é o saldo de crédito do associado no RUSTEN: ele diminui sozinho quando o associado consome. Para devolver dinheiro, lance no RUSTEN.');
+    }
     assertApprovedForPayment(t);
     const acc = await db.one('select company_id, active, opening_date, name from bank_accounts where id=$1', [d.account_id]);
     if (!acc || !acc.active) throw new HttpError(400, 'Conta não encontrada ou arquivada.');
@@ -270,6 +274,7 @@ titles.post('/:id/cancel', need('financeiro.titulos.cancelar'), async (req, res)
   const d = parse(z.object({ reason: z.string().trim().min(3, 'informe o motivo').max(300) }), req.body);
   await orgTx(req.orgId, async (db) => {
     const t = await loadTitle(db, req, id, true);
+    if (t.source === 'rusten' && String(t.external_id || '').startsWith('credito:')) throw new HttpError(409, 'Saldo de crédito do associado: ele acompanha o RUSTEN sozinho. Ajuste lá, na conta do cliente.');
     if (t.status === 'cancelado') throw new HttpError(409, 'O título já está cancelado.');
     if (await db.one('select 1 from settlements where title_id=$1 and reversed_at is null limit 1', [id])) {
       throw new HttpError(409, 'Há baixa ativa neste título. Estorne a baixa antes de cancelar.');

@@ -59,7 +59,7 @@ export default function TitleDetails({ open, onClose, titleId, kind, onSettle, o
   const footer = t && (
     <>
       {can(P.titlesCancel) && canCancel(t) && <button type="button" className="btn-ghost text-danger" onClick={() => onCancel(t)}><Ban className="h-4 w-4" aria-hidden="true" /> Cancelar conta</button>}
-      {can(P.titlesEdit) && t.status !== 'cancelado' && <button type="button" className="btn-outline" onClick={() => onEdit(t)}><Pencil className="h-4 w-4" aria-hidden="true" /> Editar</button>}
+      {can(P.titlesEdit) && t.status !== 'cancelado' && !t.member_credit && <button type="button" className="btn-outline" onClick={() => onEdit(t)}><Pencil className="h-4 w-4" aria-hidden="true" /> Editar</button>}
       {can(P.titlesSettle) && canSettle(t) && <button type="button" className="btn-primary" onClick={() => onSettle(t)}><CheckCircle2 className="h-4 w-4" aria-hidden="true" /> Dar baixa</button>}
     </>
   );

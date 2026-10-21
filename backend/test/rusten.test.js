@@ -73,11 +73,19 @@ test('conta: fiado vira conta a receber, pagamento baixa, crédito entra no caix
   assert.equal(acc.balance, 80, 'pagamento 50 + crédito 30 entraram no caixa');
   const m = (await A.get(`/api/members/${ctx.member}`)).data;
   assert.equal(m.account.balance, 4.1); assert.equal(m.account.credit, 4.1);
+  // crédito do associado aparece em Contas a pagar (e não dá para pagar/editar aqui)
+  const credPay = async () => (await A.get('/api/titles?kind=pagar&status=todos')).data.items.find((t) => /^Crédito do associado \(RUSTEN\)/.test(t.description));
+  let cp = await credPay();
+  assert.equal(cp.amount, 4.1); assert.equal(cp.status, 'aberto');
+  const acc0 = (await A.get('/api/accounts')).data.items[0].id;
+  assert.equal((await A.post(`/api/titles/${cp.id}/settle`, { account_id: acc0, paid_at: day(), amount: 4.1 })).status, 409);
+  assert.equal((await A.put(`/api/titles/${cp.id}`, { amount: 1 })).status, 409);
   // estorno do pagamento e do 2º fiado: saldo -25,90
   r = await send([{ external_id: '6', customer_external_id: '41', kind: 'estorno', amount_cents: -5000, reverses_external_id: '3', created_at: now },
     { external_id: '7', customer_external_id: '41', kind: 'estorno', amount_cents: 2000, reverses_external_id: '2', created_at: now }]);
   assert.deepEqual(r.data.items.map((x) => x.result), ['applied', 'applied']);
   assert.equal(await sumOpen(), 25.9);
+  assert.equal((await credPay()).status, 'cancelado', 'sem crédito, a conta a pagar some');
   assert.equal((await A.get('/api/accounts')).data.items.find((a) => a.name === 'RUSTEN (recebimentos)').balance, 30, 'pagamento estornado saiu do caixa');
   // perdão (ajuste +5,90): saldo -20
   await send([{ external_id: '8', customer_external_id: '41', kind: 'ajuste', amount_cents: 590, reason: 'desconto', created_at: now }]);

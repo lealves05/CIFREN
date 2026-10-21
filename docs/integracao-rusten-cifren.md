@@ -27,6 +27,7 @@ Lançamento: `{ external_id: "<id do lançamento no RUSTEN>", customer_external_
   - `pagamento_fiado` (+): dá **baixa** nas contas de fiado em aberto do associado, das mais antigas para as mais novas.
   - `credito` (+): entrada de dinheiro (conta a receber já recebida "Crédito antecipado RUSTEN") e aumenta o saldo de crédito do associado.
   - `uso_credito` (−): só movimenta o saldo de crédito (o dinheiro já entrou no `credito`).
+  - O saldo de crédito do associado aparece em **Contas a pagar** ("Crédito do associado (RUSTEN) — nome"), uma conta por associado que acompanha o saldo; o fiado em aberto aparece em **Contas a receber**.
   - `estorno` (sinal oposto ao original, com `reverses_external_id`): desfaz o efeito do lançamento original.
   - `ajuste`: + perdoa fiado (reduz as contas em aberto, sem dinheiro); − aumenta o débito (nova conta a receber).
 - `result`: `applied` | `duplicate` (já recebido) | `error` (`error.code`: `member_not_linked`, `invalid`…). Enviar o membro antes da conta.

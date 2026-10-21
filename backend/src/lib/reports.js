@@ -15,7 +15,7 @@ export async function cashflow(db, { from, to, scope }) {
       from settlements s join titles t on t.id=s.title_id where s.reversed_at is null and s.paid_at >= $2 and s.paid_at < $3 and ${sc} group by 1`, [scope, start, endExcl]);
   const day = today();
   const forecastT = await db.all(`select to_char(greatest(t.due_date, $4::date),'YYYY-MM') as m, sum(t.amount - ${PAID}) filter (where t.kind='receber') as i, sum(t.amount - ${PAID}) filter (where t.kind='pagar') as o
-      from titles t where t.status in ('aberto','parcial') and greatest(t.due_date, $4::date) >= $2 and greatest(t.due_date, $4::date) < $3 and ${sc} group by 1`, [scope, start, endExcl, day]);
+      from titles t where t.status in ('aberto','parcial') and not (t.source = 'rusten' and t.external_id like 'credito:%') and greatest(t.due_date, $4::date) >= $2 and greatest(t.due_date, $4::date) < $3 and ${sc} group by 1`, [scope, start, endExcl, day]);
   const forecastR = await db.all(`select to_char(o.due_date,'YYYY-MM') as m, sum(o.estimated_amount) filter (where c.kind='receber') as i, sum(o.estimated_amount) filter (where c.kind='pagar') as o
       from recurring_occurrences o join recurring_commitments c on c.id=o.commitment_id where o.status='prevista' and o.due_date >= greatest($2::date, $4::date) and o.due_date < $3
         and ($1::uuid[] is null or c.company_id = any($1::uuid[])) group by 1`, [scope, start, endExcl, day]);

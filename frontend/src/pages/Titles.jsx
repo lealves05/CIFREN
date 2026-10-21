@@ -42,7 +42,7 @@ export default function Titles({ kind }) {
   const showCompany = companies.length > 1 && !companyId;
   const rowActions = (t) => [
     { label: 'Ver detalhes', icon: Eye, onClick: () => actions.openDetails(t) },
-    can(P.titlesEdit) && t.status !== 'cancelado' && { label: t.installments > 1 ? 'Editar só esta parcela' : 'Editar', icon: Pencil, onClick: () => actions.openEdit(t) },
+    can(P.titlesEdit) && t.status !== 'cancelado' && !t.member_credit && { label: t.installments > 1 ? 'Editar só esta parcela' : 'Editar', icon: Pencil, onClick: () => actions.openEdit(t) },
     can(P.titlesEdit) && t.group_id && t.installments > 1 && { label: 'Lançamento original (todas as parcelas)', icon: Layers, onClick: () => actions.openGroup(t) },
     can(P.titlesCancel) && canCancel(t) && { label: t.installments > 1 ? 'Cancelar só esta parcela' : 'Cancelar', icon: Ban, onClick: () => actions.cancel(t), danger: true },
   ];
