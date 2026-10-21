@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Undo2 } from 'lucide-react';
 import Modal from '../Modal';
 import MoneyInput from '../MoneyInput';
 import CounterpartyPicker from '../CounterpartyPicker';
 import CategorySelect from '../CategorySelect';
-import { Input, Select, Textarea, InlineError, Loading, SubmitButton } from '../ui';
+import { Input, Select, Textarea, InlineError, Loading, SubmitButton, Spinner } from '../ui';
+import { P } from '../../lib/permissions';
 import { api, errorMessage } from '../../lib/api';
 import { loadRefs } from '../../lib/refData';
 import { KIND } from '../../lib/titles';
-import { money, round2, today, INTERVALS } from '../../lib/format';
+import { money, round2, today, date, INTERVALS, methodLabel } from '../../lib/format';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 
@@ -19,8 +21,9 @@ const empty = (companyId) => ({
 
 /** Formulário para lançar ou editar uma conta a pagar/receber. */
 export default function TitleForm({ open, onClose, kind, titleId, onSaved }) {
-  const { companies, companyId } = useAuth();
-  const { toast } = useUI();
+  const { companies, companyId, can } = useAuth();
+  const { toast, askReason } = useUI();
+  const [busy, setBusy] = useState('');
   const k = KIND[kind];
   const editing = !!titleId;
   const [f, setF] = useState(empty(companyId || companies[0]?.id));
@@ -55,6 +58,23 @@ export default function TitleForm({ open, onClose, kind, titleId, onSaved }) {
   }, [open, titleId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = (key) => (v) => setF((x) => ({ ...x, [key]: v && v.target ? v.target.value : v }));
+  // pagamentos (baixas) ainda valendo: dá para estornar daqui mesmo, e o valor fica livre para corrigir
+  const activePays = (orig?.settlements || []).filter((x) => !x.reversed_at);
+  const reverse = async (x) => {
+    const reason = await askReason({
+      title: 'Estornar este pagamento?', label: 'Motivo do estorno', confirmText: 'Estornar', danger: true,
+      message: `O pagamento de ${money(x.amount)} em ${date(x.paid_at)} será desfeito: o valor volta a ficar em aberto e sai do saldo da conta ${x.account?.name || ''}.${x.method === 'credito_rusten' ? ' O crédito volta para o associado no RUSTEN.' : ''}`,
+    });
+    if (!reason) return;
+    setBusy(x.id);
+    try {
+      await api.post(`/settlements/${x.id}/reverse`, { reason });
+      const t = await api.get(`/titles/${titleId}`);
+      setOrig(t); setF((cur) => ({ ...cur, amount: t.amount }));
+      toast('Pagamento estornado. A conta voltou a ficar em aberto.');
+      onSaved?.();
+    } catch (e) { toast(errorMessage(e), 'error'); } finally { setBusy(''); }
+  };
   const amountLocked = editing && orig && (orig.status !== 'aberto' || Number(orig.paid_amount) > 0);
   const n = Math.min(120, Math.max(1, Number(f.installments) || 1));
   // 1 parcela: o valor digitado é o total; mais de 1: é o valor de cada parcela (o total é calculado)
@@ -111,7 +131,7 @@ export default function TitleForm({ open, onClose, kind, titleId, onSaved }) {
             <Input className="sm:col-span-2" label="Descrição" required value={f.description} onChange={set('description')} maxLength={200}
               placeholder={kind === 'pagar' ? 'Ex.: Aluguel da loja' : 'Ex.: Venda para cliente'} error={show('description')} data-autofocus />
             <MoneyInput label={!editing && n > 1 ? 'Valor de cada parcela' : editing ? 'Valor' : 'Valor total'} required value={f.amount} onChange={set('amount')} error={show('amount')}
-              disabled={amountLocked} hint={amountLocked ? 'O valor não pode mudar porque já houve baixa.' : !editing && n > 1 ? `Total: ${money(total)} em ${n} parcelas.` : undefined} />
+              disabled={amountLocked} hint={amountLocked ? (activePays.length ? 'O valor não pode mudar porque já houve baixa. Estorne o pagamento abaixo para liberar.' : 'O valor não pode mudar porque já houve baixa.') : !editing && n > 1 ? `Total: ${money(total)} em ${n} parcelas.` : undefined} />
             <Input label={n > 1 ? 'Vencimento da 1ª parcela' : 'Vencimento'} type="date" required value={f.due_date} onChange={set('due_date')} error={show('due_date')} />
             {(!editing && companies.length > 1) ? (
               <Select label="Empresa" required value={f.company_id} onChange={set('company_id')} error={show('company_id')}>
@@ -131,6 +151,26 @@ export default function TitleForm({ open, onClose, kind, titleId, onSaved }) {
             <Input label="Nº do documento" value={f.document_number} onChange={set('document_number')} maxLength={60} placeholder="Nota, boleto, recibo…" />
             <Input label="Mês de competência" type="month" value={f.competence} onChange={set('competence')} hint="Mês a que a despesa ou receita se refere." />
           </div>
+
+          {editing && activePays.length > 0 && (
+            <fieldset className="rounded-app-sm border border-line p-3">
+              <legend className="px-1 text-xs font-medium text-ink-soft">{kind === 'pagar' ? 'Pagamentos registrados' : 'Recebimentos registrados'}</legend>
+              <ul className="space-y-2">
+                {activePays.map((x) => (
+                  <li key={x.id} className="flex flex-wrap items-center gap-2 text-sm">
+                    <span className="min-w-0 flex-1"><strong className="tabular-nums">{money(Number(x.amount) + Number(x.interest || 0) + Number(x.fine || 0) - Number(x.discount || 0))}</strong>
+                      <span className="text-ink-soft"> · {date(x.paid_at)} · {x.account?.name}{x.method ? ` · ${methodLabel(x.method)}` : ''}</span></span>
+                    {can(P.titlesSettle) && (
+                      <button type="button" className="btn-outline btn-sm text-danger" onClick={() => reverse(x)} disabled={!!busy} aria-label={`Estornar o pagamento de ${money(x.amount)} em ${date(x.paid_at)}`}>
+                        {busy === x.id ? <Spinner /> : <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />} Estornar pagamento
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-ink-faint">O estorno desfaz o pagamento, devolve o valor à conta e fica registrado na auditoria com o motivo.</p>
+            </fieldset>
+          )}
 
           {!editing && (
             <fieldset className="rounded-app-sm border border-line p-3">

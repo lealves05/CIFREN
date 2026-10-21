@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Search, CheckCircle2, Eye, Pencil, Ban, ArrowUpFromLine, ArrowDownToLine, FilterX, Layers, CalendarRange } from 'lucide-react';
+import { Plus, Search, CheckCircle2, Eye, Pencil, Ban, ArrowUpFromLine, ArrowDownToLine, FilterX, Layers, CalendarRange, Undo2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api, qs } from '../lib/api';
 import { usePaged } from '../lib/useAsync';
@@ -75,6 +75,7 @@ export default function Titles({ kind }) {
     { label: 'Ver detalhes', icon: Eye, onClick: () => actions.openDetails(t) },
     can(P.titlesEdit) && t.status !== 'cancelado' && !t.member_credit && { label: t.installments > 1 ? 'Editar só esta parcela' : 'Editar', icon: Pencil, onClick: () => actions.openEdit(t) },
     can(P.titlesEdit) && t.group_id && t.installments > 1 && { label: 'Lançamento original (todas as parcelas)', icon: Layers, onClick: () => actions.openGroup(t) },
+    can(P.titlesSettle) && ['pago', 'parcial'].includes(t.status) && !t.member_credit && { label: t.kind === 'pagar' ? 'Estornar pagamento' : 'Estornar recebimento', icon: Undo2, onClick: () => actions.openEdit(t) },
     can(P.titlesCancel) && canCancel(t) && { label: t.installments > 1 ? 'Cancelar só esta parcela' : 'Cancelar', icon: Ban, onClick: () => actions.cancel(t), danger: true },
   ];
   const settleBtn = (t, cls = '') => can(P.titlesSettle) && canSettle(t) && (
