@@ -98,3 +98,19 @@ test('inadimplência conferida com o RUSTEN: crédito cobre a mensalidade, quita
   assert.equal((await A.get(`/api/titles/${ctx.feeId}`)).data.status, 'pago');
   assert.equal((await A.post(`/api/members/${ctx.member}/pay-with-credit`, {})).status, 409, 'nada mais em aberto');
 });
+
+test('inadimplência: a dívida do associado soma mensalidades e todo o fiado do RUSTEN (vencido ou não)', async () => {
+  const m = await lorler('/members', { method: 'POST', body: { items: [{ external_id: '88', name: 'Bruno Fiado', cpf: null, active: true }] } });
+  const id = m.data.items[0].member_id;
+  const r1 = await lorler('/account', { method: 'POST', body: { items: [{ external_id: 'f88', customer_external_id: '88', kind: 'fiado', amount_cents: -8590, created_at: new Date().toISOString() }] } });
+  assert.equal(r1.data.items[0].result, 'applied');
+  const fee = (await A.get(`/api/members/${id}`)).data.fees.find((f) => f.status !== 'cancelado');
+  const feeLate = fee && fee.due_date < today();
+  const r = (await A.get('/api/reports/aging?kind=receber')).data;
+  const me = r.top.find((t) => t.member_id === id);
+  assert.ok(me, 'associado com fiado a vencer entra na lista');
+  assert.equal(me.fiado, 85.9); assert.equal(me.fiado_due, 85.9);
+  assert.equal(me.amount, Math.round(((fee ? Number(fee.amount) : 0) + 85.9) * 100) / 100, 'dívida total = mensalidade + fiado');
+  assert.equal(me.overdue, feeLate ? Number(fee.amount) : 0);
+  assert.equal(r.rusten.fiado_total >= 85.9, true);
+});
