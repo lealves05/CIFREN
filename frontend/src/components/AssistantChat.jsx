@@ -162,7 +162,7 @@ export default function AssistantChat({ client, onClose, userName, className }) 
             <AssistantAvatar name={as.name} avatar={as.avatar} color={as.color} size="h-7 w-7" />
             <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-surface px-3 py-2 text-sm shadow-sm">
               <p className="whitespace-pre-wrap">{as.greeting}</p>
-              <p className="mt-1 text-[11px] text-ink-faint">Sou uma inteligência artificial. Nunca peço senhas nem códigos. Nada é alterado sem a sua autorização.</p>
+              <p className="mt-1 text-[11px] text-ink-faint">Sou uma inteligência artificial: as conversas são processadas por um fornecedor de IA (Anthropic) e guardadas pela LORLER para o atendimento. Não envie senhas, cartões nem dados de clientes. Nada é alterado sem a sua autorização.</p>
             </div>
           </div>
         )}
