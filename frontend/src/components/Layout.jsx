@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { ChevronDown, LogOut, UserRound, Building2, Check, MoreHorizontal, Clock, Repeat, Send, Map as MapIcon } from 'lucide-react';
+import { ChevronDown, LogOut, UserRound, Building2, Check, MoreHorizontal, Clock, Repeat, Send, Map as MapIcon, LifeBuoy, Bot } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useUI } from '../context/UIContext';
 import { visibleGroups, visibleNav, OVERVIEW } from '../lib/nav';
@@ -104,6 +104,8 @@ function UserMenu() {
         {role?.name && <div className="mt-1 text-xs text-ink-soft">Perfil: {role.name}</div>}
       </div>
       <Link role="menuitem" to="/conta" className={cx(itemCls, 'mt-1')}><UserRound className="h-4 w-4" aria-hidden="true" /> Minha conta</Link>
+      <Link role="menuitem" to="/suporte" className={itemCls}><LifeBuoy className="h-4 w-4" aria-hidden="true" /> Suporte</Link>
+      <Link role="menuitem" to="/suporte?chat=1" className={itemCls}><Bot className="h-4 w-4" aria-hidden="true" /> Falar com o assistente</Link>
       <button type="button" role="menuitem" className={cx(itemCls, 'text-danger')} onClick={out}><LogOut className="h-4 w-4" aria-hidden="true" /> Sair</button>
     </Dropdown>
   );

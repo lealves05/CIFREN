@@ -34,6 +34,7 @@ const Expenses = lazy(() => import('./pages/Expenses'));
 const Documents = lazy(() => import('./pages/Documents'));
 const DocumentDetail = lazy(() => import('./pages/DocumentDetail'));
 const Assistant = lazy(() => import('./pages/Assistant'));
+const Support = lazy(() => import('./pages/Support'));
 const AiSettings = lazy(() => import('./pages/settings/AiSettings'));
 const NotificationSettings = lazy(() => import('./pages/settings/NotificationSettings'));
 const Integrations = lazy(() => import('./pages/settings/Integrations'));
@@ -114,6 +115,7 @@ export default function App() {
             <Route path="configuracoes/seguranca" element={<Allow perms={[P.security]}><Security /></Allow>} />
             <Route path="configuracoes/alcadas" element={<Allow perms={[P.approvalRules]}><ApprovalRules /></Allow>} />
             <Route path="visao-geral" element={<Overview />} />
+            <Route path="suporte" element={<Support />} />
             <Route path="conta" element={<Account />} />
             <Route path="mais" element={<More />} />
             <Route path="*" element={<NotFound />} />

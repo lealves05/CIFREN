@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, ArrowUpFromLine, ArrowDownToLine, FolderOpen, Building2, Users, ShieldCheck, UserRound,
   Wallet, ClipboardCheck, Landmark, Repeat, ShoppingCart, Receipt, FileText, BarChart3, LineChart, Table2,
-  Target, AlarmClock, Download, Sparkles, Settings, Plug, Bot, Bell, Lock, Scale, Map as MapIcon, ShoppingBag, HandCoins,
+  Target, AlarmClock, Download, Sparkles, Settings, Plug, Bot, Bell, Lock, Scale, Map as MapIcon, ShoppingBag, HandCoins, LifeBuoy,
 } from 'lucide-react';
 import { P, APPROVER_PERMS } from './permissions';
 
@@ -55,6 +55,7 @@ export const NAV_GROUPS = [
       { to: '/auditoria', label: 'Auditoria', short: 'Auditoria', icon: ShieldCheck, perms: [P.auditView] },
     ],
   },
+  { key: 'suporte', items: [{ to: '/suporte', label: 'Suporte', short: 'Suporte', icon: LifeBuoy, perms: null }] },
   { key: 'conta', items: [{ to: '/conta', label: 'Minha conta', short: 'Conta', icon: UserRound, perms: null }] },
 ];
 

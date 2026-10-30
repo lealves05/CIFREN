@@ -20,6 +20,7 @@ import { documents } from './routes/documents.js';
 import { ai, insights, notifications, security } from './routes/settings.js';
 import { integrations, lorlerApi } from './routes/integrations.js';
 import { members } from './routes/members.js';
+import { supportChat } from './routes/supportChat.js';
 
 export const VERSION = process.env.CIFREN_VERSION || '2026.10-b';
 
@@ -86,6 +87,7 @@ export function createApp() {
   priv.use('/security', security);
   priv.use('/integrations', integrations);
   priv.use('/members', members);
+  priv.use('/support-chat', supportChat); // Central de Atendimento: chat com o assistente LORLER
   app.use('/api', priv);
 
   app.use((_req, _res, next) => next(new HttpError(404, 'Rota não encontrada.')));

@@ -34,7 +34,7 @@ export const FEATURES = {
   despesas: { label: 'Despesas e reembolsos', routes: ['/expenses'] },
   agentes_ia: { label: 'Agentes de IA (pergunte ao financeiro, insights com IA)', routes: ['/ai'] },
 };
-const BLOCKED_ALLOWED = ['/billing'];
+const BLOCKED_ALLOWED = ['/billing', '/support-chat']; // organização bloqueada ainda fala com o suporte
 
 let cfgCache = { at: 0, v: null };
 export async function platformConfig() {
