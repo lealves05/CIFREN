@@ -77,7 +77,7 @@ export function AuthProvider({ children }) {
   }, [refresh]);
 
   const value = useMemo(() => ({
-    me, status, user: me?.user, org: me?.org, orgs: me?.orgs || [], role: me?.role, companies,
+    me, status, ecosystem: me?.ecosystem || null, user: me?.user, org: me?.org, orgs: me?.orgs || [], role: me?.role, companies,
     access: me?.access || null, companyId, setCompanyId, can, moduleOn, refresh, logout, switchOrg,
   }), [me, status, companies, companyId, setCompanyId, can, moduleOn, refresh, logout, switchOrg]);
 

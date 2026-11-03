@@ -11,6 +11,7 @@ import { newSecret, verifyTotp, otpauthUrl, recoveryCodes } from '../totp.js';
 import { seedOrganization } from '../permissions.js';
 import { audit } from '../audit.js';
 import { registerOrganization, accessFor, modulesFrom, platformMode } from '../platform.js';
+import { isEcoLogin, ecoLogin, ecoMfa, ecoEnter, ecoCompanies, SUPPORT_USER_NAME } from '../ecosystem.js';
 
 const r = Router();
 const email = z.string().trim().toLowerCase().email('e-mail inválido').max(200);
@@ -49,6 +50,10 @@ r.post('/signup', limitByIp('signup', 5, 3600, 'Muitos cadastros a partir deste 
 
 r.post('/login', limitByIp('login', 20, 900), async (req, res) => {
   const d = parse(z.object({ email, password: z.string().min(1, 'informe a senha').max(200) }), req.body);
+  if (isEcoLogin(d.email)) {
+    const eco = await ecoLogin(d.email, d.password, req.ip);
+    return res.json({ mfa_required: true, mfa_token: eco.mfa_token, ecosystem: true });
+  }
   await limitByKey('login', d.email, 8, 900, res, 'Muitas tentativas para este e-mail. Aguarde 15 minutos.');
   const u = await one('select id, name, email, password_hash, active, mfa_enabled, auth_version from users where lower(email) = $1', [d.email]);
   const ok = await bcrypt.compare(d.password, u?.password_hash || DUMMY_HASH);
@@ -85,6 +90,17 @@ r.post('/mfa', limitByIp('mfa', 30, 900), async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---- Usuário master do ecossistema: cadastrado no Master, entra em qualquer organização como Suporter2l2 ----
+const ecoRespond = async (req, res, who, enter) => {
+  await createSession(res, req, enter.user, enter.orgId, who);
+  res.json({ ok: true, user: { id: enter.user.id, name: SUPPORT_USER_NAME }, ecosystem: { name: who.name, internal: enter.internal } });
+};
+r.post('/ecosystem/mfa', limitByIp('mfa', 30, 900), async (req, res) => {
+  const d = parse(z.object({ mfa_token: z.string().min(20).max(1000), code: z.string().trim().min(6).max(20) }), req.body);
+  const who = await ecoMfa(d.mfa_token, d.code, req.ip);
+  await ecoRespond(req, res, who, await ecoEnter({ sv: who.sv, ip: req.ip, req }));
+});
+
 r.post('/logout', async (req, res) => {
   const t = readCookie(req);
   if (t) await q('update sessions set revoked_at = now() where token_hash=$1 and revoked_at is null', [sha256(t)]);
@@ -94,6 +110,15 @@ r.post('/logout', async (req, res) => {
 
 // ---------------- daqui em diante: com sessão ----------------
 r.use(requireAuth);
+
+const needEco = (req, _res, next) => { if (!req.ecosystem) throw new HttpError(403, 'Disponível apenas para o usuário master.'); next(); };
+r.get('/ecosystem/companies', needEco, async (req, res) => res.json(await ecoCompanies(req.query.q)));
+r.post('/ecosystem/enter', needEco, async (req, res) => {
+  const d = parse(z.object({ company_id: z.string().refine(isUuid, 'organização inválida').nullable().optional(), reason: z.string().trim().max(300).nullable().optional() }), req.body || {});
+  const enter = await ecoEnter({ sv: req.ecosystem.sv, orgId: d.company_id || null, reason: d.reason || null, ip: req.ip, req });
+  await q('update sessions set revoked_at = now() where id = $1', [req.sessionId]); // encerra o acesso à organização de onde ele saiu
+  await ecoRespond(req, res, req.ecosystem, enter);
+});
 
 r.get('/me', async (req, res) => {
   const orgs = (await q(`select o.id, o.name, r.name as role_name from memberships m join organizations o on o.id=m.org_id join roles r on r.id=m.role_id
@@ -107,10 +132,12 @@ r.get('/me', async (req, res) => {
     company_scope: req.companyScope, modules: modulesFrom(access),
     access: access ? { status: access.status, blocked: !!access.blocked, trial_ends_at: access.trial_ends_at || null } : null,
     mode: await platformMode(),
+    ...(req.ecosystem ? { ecosystem: { name: req.ecosystem.name, internal: !!(await one('select is_internal from organizations where id=$1', [req.orgId]))?.is_internal } } : {}),
   });
 });
 
 r.post('/switch-org', async (req, res) => {
+  if (req.ecosystem) throw new HttpError(403, 'Use a barra do usuário master para trocar de organização.');
   const d = parse(z.object({ org_id: z.string().refine(isUuid, 'organização inválida') }), req.body);
   if (!(await one('select 1 from memberships where user_id=$1 and org_id=$2 and active', [req.user.id, d.org_id]))) throw new HttpError(403, 'Você não tem acesso a esta organização.');
   await q('update sessions set org_id=$2 where id=$1', [req.sessionId, d.org_id]);

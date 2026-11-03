@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { ChevronDown, LogOut, UserRound, Building2, Check, MoreHorizontal, Clock, Repeat, Send, Map as MapIcon, LifeBuoy, Bot } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useUI } from '../context/UIContext';
+import EcosystemBar from './EcosystemBar';
 import { visibleGroups, visibleNav, OVERVIEW } from '../lib/nav';
 import { daysUntil, date, plural } from '../lib/format';
 import { api, errorMessage, EVENTS } from '../lib/api';
@@ -243,6 +244,7 @@ export default function Layout() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
+        <EcosystemBar />
         <TrialBanner />
         <header className="sticky top-0 z-30 flex items-center gap-1 border-b border-line bg-surface/95 px-3 py-2 backdrop-blur sm:gap-2 sm:px-5">
           <Link to="/" className="md:hidden" aria-label="CIFREN, ir para o início"><Logo compact /></Link>

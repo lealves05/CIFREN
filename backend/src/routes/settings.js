@@ -140,7 +140,7 @@ notifications.post('/email-test', need('notificacoes.configurar'), async (req, r
 // ================= SEGURANÇA =================
 export const security = Router();
 security.get('/', need('seguranca.configurar'), async (req, res) => {
-  const r = await orgTx(req.orgId, (db) => db.one(`select o.require_mfa, (select count(*)::int from memberships m join users u on u.id=m.user_id where m.org_id=o.id and m.active and not u.mfa_enabled) as without_mfa
+  const r = await orgTx(req.orgId, (db) => db.one(`select o.require_mfa, (select count(*)::int from memberships m join users u on u.id=m.user_id where m.org_id=o.id and m.active and not u.is_support and not u.mfa_enabled) as without_mfa
       from organizations o where o.id=$1`, [req.orgId]));
   res.json({ require_mfa: r.require_mfa, users_without_mfa: r.without_mfa });
 });

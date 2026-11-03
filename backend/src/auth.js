@@ -22,14 +22,15 @@ function setCookie(res, value, maxAge) {
   res.append('Set-Cookie', attrs.join('; '));
 }
 
-export async function createSession(res, req, user, orgId) {
+export async function createSession(res, req, user, orgId, ecosystem = null) {
   const token = randomToken(32);
-  await q(`insert into sessions (user_id, org_id, token_hash, auth_version, expires_at, ip, user_agent)
-           values ($1,$2,$3,$4, now() + make_interval(secs => $5), $6, $7)`,
-  [user.id, orgId, sha256(token), user.auth_version, MAX_AGE_S, req.ip || null, String(req.headers['user-agent'] || '').slice(0, 200)]);
+  const maxAge = ecosystem ? 8 * 3600 : MAX_AGE_S; // sessão do usuário master: no máximo 8 horas
+  await q(`insert into sessions (user_id, org_id, token_hash, auth_version, expires_at, ip, user_agent, ecosystem)
+           values ($1,$2,$3,$4, now() + make_interval(secs => $5), $6, $7, $8)`,
+  [user.id, orgId, sha256(token), user.auth_version, maxAge, req.ip || null, String(req.headers['user-agent'] || '').slice(0, 200), ecosystem ? JSON.stringify({ sv: ecosystem.sv, name: ecosystem.name }) : null]);
   await q('update users set last_login_at = now() where id = $1', [user.id]);
   if (orgId) await q('update memberships set last_login_at = now() where user_id = $1 and org_id = $2', [user.id, orgId]);
-  setCookie(res, token, MAX_AGE_S);
+  setCookie(res, token, maxAge);
 }
 
 export function clearCookie(res) { setCookie(res, '', 0); }
@@ -49,13 +50,15 @@ export function requireCsrfHeader(req, _res, next) {
 export async function requireAuth(req, _res, next) {
   const token = readCookie(req);
   if (!token || token.length > 100) throw new HttpError(401, 'Entre para continuar.');
-  const s = await one(`select s.id, s.user_id, s.org_id, s.auth_version, s.last_seen_at, s.expires_at,
+  const s = await one(`select s.id, s.user_id, s.org_id, s.auth_version, s.last_seen_at, s.expires_at, s.ecosystem,
                               u.name, u.email, u.active, u.auth_version as user_av, u.mfa_enabled, u.must_change_password
                          from sessions s join users u on u.id = s.user_id
                         where s.token_hash = $1 and s.revoked_at is null and s.expires_at > now()`, [sha256(token)]);
   if (!s || !s.active || s.auth_version !== s.user_av || Date.now() - new Date(s.last_seen_at).getTime() > IDLE_MS) {
     throw new HttpError(401, 'Sessão encerrada. Entre novamente.');
   }
+  if (s.ecosystem) { const { ecoGuard } = await import('./ecosystem.js'); await ecoGuard(s.ecosystem.sv); }
+  req.ecosystem = s.ecosystem || null;
   let m = s.org_id ? await one(`select m.org_id, m.company_ids, r.key as role_key, r.name as role_name, r.permissions, o.name as org_name, o.require_mfa
                                   from memberships m join roles r on r.id = m.role_id join organizations o on o.id = m.org_id
                                  where m.user_id = $1 and m.org_id = $2 and m.active`, [s.user_id, s.org_id]) : null;
@@ -79,7 +82,7 @@ export async function requireAuth(req, _res, next) {
 
 /** Organização exige 2 etapas: quem ainda não ligou só usa as rotas da própria conta (/api/auth/*). */
 export function mfaGate(req, _res, next) {
-  if (req.org?.require_mfa && !req.user?.mfa_enabled) throw new HttpError(403, 'Sua organização exige a verificação em duas etapas. Ligue em Minha conta para continuar.', { code: 'MFA_SETUP_REQUIRED' });
+  if (!req.ecosystem && req.org?.require_mfa && !req.user?.mfa_enabled) throw new HttpError(403, 'Sua organização exige a verificação em duas etapas. Ligue em Minha conta para continuar.', { code: 'MFA_SETUP_REQUIRED' });
   next();
 }
 

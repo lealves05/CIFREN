@@ -39,7 +39,7 @@ platformApi.get('/tenants/:id', async (req, res) => {
   const o = await org(req.params.id);
   const { is_demo: _d, ...t } = await tenantPayload(o.id);
   const { rows: users } = await q(`select u.name, u.email, r.name as role_label, m.active, m.last_login_at
-      from memberships m join users u on u.id=m.user_id join roles r on r.id=m.role_id where m.org_id=$1 order by r.key='dono' desc, u.name limit 200`, [o.id]);
+      from memberships m join users u on u.id=m.user_id join roles r on r.id=m.role_id where m.org_id=$1 and not u.is_support order by r.key='dono' desc, u.name limit 200`, [o.id]);
   const companies = await orgTx(o.id, (db) => db.all('select name, document, active from companies order by created_at'));
   res.json({ tenant: { ...t, users: { n: users.length, active: users.filter((u) => u.active).length, list: users }, units: companies } });
 });
@@ -55,7 +55,7 @@ platformApi.post('/tenants/:id/access', async (req, res) => {
 platformApi.post('/tenants/:id/owner-reset', async (req, res) => {
   const o = await org(req.params.id);
   const owner = await one(`select u.id, u.email from memberships m join roles r on r.id=m.role_id join users u on u.id=m.user_id
-      where m.org_id=$1 and r.key='dono' order by m.created_at limit 1`, [o.id]);
+      where m.org_id=$1 and r.key='dono' and not u.is_support order by m.created_at limit 1`, [o.id]);
   if (!owner) throw new HttpError(404, 'Esta organização não tem Dono.');
   if ((await one('select count(*)::int as n from memberships where user_id=$1', [owner.id])).n > 1) {
     throw new HttpError(409, 'O Dono usa a mesma conta em outra organização; peça que ele use "Esqueci a senha" ou troque em "Minha conta".');

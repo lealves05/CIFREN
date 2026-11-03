@@ -13,6 +13,7 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [mfaToken, setMfaToken] = useState(null);
+  const [ecoLogin, setEcoLogin] = useState(false);
   const [code, setCode] = useState('');
   const [useRecovery, setUseRecovery] = useState(false);
   const [error, setError] = useState('');
@@ -31,7 +32,7 @@ export default function Login() {
     setBusy(true);
     try {
       const res = await api.post('/auth/login', { email: email.trim(), password });
-      if (res?.mfa_required) { setMfaToken(res.mfa_token); setCode(''); }
+      if (res?.mfa_required) { setMfaToken(res.mfa_token); setEcoLogin(!!res.ecosystem); setCode(''); }
       else await goIn();
     } catch (err) { setError(errorMessage(err)); } finally { setBusy(false); }
   };
@@ -44,7 +45,7 @@ export default function Login() {
     if (useRecovery && clean.length < 6) { setError('Digite o código de recuperação completo.'); return; }
     setBusy(true);
     try {
-      await api.post('/auth/mfa', { mfa_token: mfaToken, code: clean });
+      await api.post(ecoLogin ? '/auth/ecosystem/mfa' : '/auth/mfa', { mfa_token: mfaToken, code: clean });
       await goIn();
     } catch (err) {
       if (err.status === 401 && /expir/i.test(err.message)) setMfaToken(null);
@@ -64,9 +65,9 @@ export default function Login() {
               inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="000000" className="[&_input]:text-center [&_input]:text-lg [&_input]:tracking-[0.4em]" required />
           )}
           <SubmitButton loading={busy} className="btn-primary w-full"><ShieldCheck className="h-4 w-4" aria-hidden="true" /> Confirmar e entrar</SubmitButton>
-          <button type="button" className="btn-ghost w-full" onClick={() => { setUseRecovery((v) => !v); setCode(''); setError(''); }}>
+          {!ecoLogin && (<button type="button" className="btn-ghost w-full" onClick={() => { setUseRecovery((v) => !v); setCode(''); setError(''); }}>
             {useRecovery ? 'Usar o código do aplicativo' : 'Perdi o celular: usar código de recuperação'}
-          </button>
+          </button>)}
           <button type="button" className="btn-ghost w-full" onClick={() => { setMfaToken(null); setError(''); }}>
             <ArrowLeft className="h-4 w-4" aria-hidden="true" /> Voltar
           </button>

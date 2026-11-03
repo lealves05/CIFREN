@@ -130,7 +130,7 @@ async function validCompanies(req, ids) {
 users.get('/', async (req, res) => {
   const { rows } = await q(`select u.id, u.name, u.email, r.key as role_key, r.name as role_name, m.company_ids, m.active, m.last_login_at, u.mfa_enabled
                               from memberships m join users u on u.id=m.user_id join roles r on r.id=m.role_id
-                             where m.org_id=$1 order by m.active desc, u.name`, [req.orgId]);
+                             where m.org_id=$1 and not u.is_support order by m.active desc, u.name`, [req.orgId]);
   res.json({ items: rows });
 });
 users.post('/', async (req, res) => {
@@ -152,7 +152,7 @@ users.post('/', async (req, res) => {
   res.status(201).json({ id: u.id, temporary_password, existing_account: !temporary_password });
 });
 async function ownersLeft(req, exceptUserId) {
-  return (await one(`select count(*)::int as n from memberships m join roles r on r.id=m.role_id where m.org_id=$1 and r.key='dono' and m.active and m.user_id<>$2`, [req.orgId, exceptUserId])).n;
+  return (await one(`select count(*)::int as n from memberships m join roles r on r.id=m.role_id join users u on u.id=m.user_id where m.org_id=$1 and r.key='dono' and m.active and not u.is_support and m.user_id<>$2`, [req.orgId, exceptUserId])).n;
 }
 users.put('/:id', async (req, res) => {
   const id = uuidParam(req.params.id);

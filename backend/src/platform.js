@@ -74,10 +74,10 @@ export async function hubCall(method, route, payload, timeoutMs = 10000) {
 /** Dados da organização enviados à central (sem dados financeiros dos clientes, sem senhas). */
 export async function tenantPayload(orgId) {
   const o = await one(`select o.id, o.name, o.created_at, o.is_demo,
-      (select u.name from memberships m join roles r on r.id=m.role_id join users u on u.id=m.user_id where m.org_id=o.id and r.key='dono' order by m.created_at limit 1) as owner_name,
-      (select u.email from memberships m join roles r on r.id=m.role_id join users u on u.id=m.user_id where m.org_id=o.id and r.key='dono' order by m.created_at limit 1) as owner_email,
-      (select max(m.last_login_at) from memberships m where m.org_id=o.id) as last_access_at,
-      (select count(*)::int from memberships m where m.org_id=o.id and m.active) as users
+      (select u.name from memberships m join roles r on r.id=m.role_id join users u on u.id=m.user_id where m.org_id=o.id and r.key='dono' and not u.is_support order by m.created_at limit 1) as owner_name,
+      (select u.email from memberships m join roles r on r.id=m.role_id join users u on u.id=m.user_id where m.org_id=o.id and r.key='dono' and not u.is_support order by m.created_at limit 1) as owner_email,
+      (select max(m.last_login_at) from memberships m join users u on u.id=m.user_id where m.org_id=o.id and not u.is_support) as last_access_at,
+      (select count(*)::int from memberships m join users u on u.id=m.user_id where m.org_id=o.id and m.active and not u.is_support) as users
      from organizations o where o.id=$1`, [orgId]);
   if (!o) return null;
   return { remote_id: o.id, name: o.name, email: o.owner_email, owner_name: o.owner_name, created_at: o.created_at,
