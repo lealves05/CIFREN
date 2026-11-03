@@ -45,6 +45,7 @@ integrations.get('/', need('integracoes.gerenciar'), async (req, res) => {
 });
 /** Conectar um sistema: gera a chave (a anterior do mesmo sistema é revogada) e devolve o código de conexão e o link para abrir o sistema já conectando. */
 integrations.post('/connect', need('integracoes.gerenciar'), async (req, res) => {
+  if (req.ecosystem) throw new HttpError(403, 'O usuário master não cria chaves de API. Peça ao responsável pela empresa.');
   const d = parse(z.object({ system: z.enum(SYSTEMS) }), req.body);
   const key = `ck_${d.system}_${randomToken(30)}`;
   const prefix = key.slice(0, `ck_${d.system}_`.length + 4);
@@ -71,6 +72,7 @@ integrations.put('/:id/settings', need('integracoes.gerenciar'), async (req, res
 });
 // compatível com a Fase B: criar chave avulsa
 integrations.post('/', need('integracoes.gerenciar'), async (req, res) => {
+  if (req.ecosystem) throw new HttpError(403, 'O usuário master não cria chaves de API. Peça ao responsável pela empresa.');
   const d = parse(z.object({ system: z.enum(SYSTEMS), name: z.string().trim().min(2).max(80) }), req.body);
   const key = `ck_${d.system}_${randomToken(30)}`;
   const prefix = key.slice(0, `ck_${d.system}_`.length + 4);
