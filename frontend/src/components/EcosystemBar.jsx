@@ -25,7 +25,7 @@ export default function EcosystemBar() {
     setBusy(true);
     try {
       await api.post('/auth/ecosystem/enter', { company_id: companyId, reason: reason.trim() || null });
-      window.location.assign('/');
+      window.location.assign(import.meta.env.BASE_URL || '/');
     } catch (e) { toast(e.message, 'error'); setBusy(false); }
   };
   return (
