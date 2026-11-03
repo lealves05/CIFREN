@@ -57,6 +57,7 @@ const sign = (secret, ts, method, route, body) => crypto.createHmac('sha256', se
 export async function hubCall(method, route, payload, timeoutMs = 10000) {
   const cfg = await platformConfig();
   if (!cfg) throw new HttpError(503, 'A assinatura ainda não está configurada nesta instalação.', { code: 'PLATFORM_NOT_CONFIGURED' });
+  if (!/^https:\/\//.test(cfg.hub) && process.env.NODE_ENV === 'production') throw new HttpError(503, 'Endereço da central deve usar HTTPS.', { code: 'PLATFORM_NOT_CONFIGURED' });
   const body = payload === undefined ? '' : JSON.stringify(payload);
   const ts = Math.floor(Date.now() / 1000);
   let res;

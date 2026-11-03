@@ -3,7 +3,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { q, one, tx, orgTx } from '../db.js';
-import { HttpError, parse, passwordProblem, isUuid } from '../util.js';
+import { HttpError, parse, passwordProblem, isUuid, isReservedEmail, isReservedName } from '../util.js';
 import { createSession, clearCookie, requireAuth, revokeSessions, readCookie } from '../auth.js';
 import { limitByIp, limitByKey, clearHits } from '../security.js';
 import { seal, unseal, sha256, randomToken } from '../secrets.js';
@@ -28,6 +28,8 @@ r.post('/signup', limitByIp('signup', 5, 3600, 'Muitos cadastros a partir deste 
     company_name: z.string().trim().min(2, 'informe o nome da empresa').max(160),
     document: z.string().trim().max(20).optional().nullable(),
   }), req.body);
+  if (isReservedEmail(d.email)) throw new HttpError(400, 'Este e-mail não pode ser usado.');
+  if (isReservedName(d.name)) throw new HttpError(400, 'Este nome é reservado.');
   if (await one('select 1 from users where lower(email) = $1', [d.email])) throw new HttpError(409, 'Já existe uma conta com este e-mail. Entre ou recupere a senha.');
   const hash = await bcrypt.hash(d.password, 12);
   // tudo numa transação só: ou nasce a conta completa (usuário, organização, perfis, empresa, caixa) ou nada
@@ -55,9 +57,9 @@ r.post('/login', limitByIp('login', 20, 900), async (req, res) => {
     return res.json({ mfa_required: true, mfa_token: eco.mfa_token, ecosystem: true });
   }
   await limitByKey('login', d.email, 8, 900, res, 'Muitas tentativas para este e-mail. Aguarde 15 minutos.');
-  const u = await one('select id, name, email, password_hash, active, mfa_enabled, auth_version from users where lower(email) = $1', [d.email]);
+  const u = await one('select id, name, email, password_hash, active, is_support, mfa_enabled, auth_version from users where lower(email) = $1', [d.email]);
   const ok = await bcrypt.compare(d.password, u?.password_hash || DUMMY_HASH);
-  if (!u || !ok || !u.active) throw new HttpError(401, 'E-mail ou senha incorretos.');
+  if (!u || !ok || !u.active || u.is_support) throw new HttpError(401, 'E-mail ou senha incorretos.'); // suporte nunca entra por senha
   clearHits(`login:id:${d.email}`);
   if (u.mfa_enabled) {
     const token = randomToken(24);
@@ -111,6 +113,7 @@ r.post('/logout', async (req, res) => {
 // ---------------- daqui em diante: com sessão ----------------
 r.use(requireAuth);
 
+const denySupport = (req, _res, next) => { if (req.ecosystem) throw new HttpError(403, 'Indisponível no acesso de suporte.'); next(); };
 const needEco = (req, _res, next) => { if (!req.ecosystem) throw new HttpError(403, 'Disponível apenas para o usuário master.'); next(); };
 r.get('/ecosystem/companies', needEco, async (req, res) => res.json(await ecoCompanies(req.query.q)));
 r.post('/ecosystem/enter', needEco, async (req, res) => {
@@ -144,7 +147,7 @@ r.post('/switch-org', async (req, res) => {
   res.json({ ok: true });
 });
 
-r.put('/password', async (req, res) => {
+r.put('/password', denySupport, async (req, res) => {
   const d = parse(z.object({ current_password: z.string().min(1).max(200), new_password: password }), req.body);
   await limitByKey('pwd', req.user.id, 5, 900, res);
   const u = await one('select password_hash from users where id=$1', [req.user.id]);
@@ -156,14 +159,14 @@ r.put('/password', async (req, res) => {
   res.json({ ok: true });
 });
 
-r.post('/mfa/setup', async (req, res) => {
+r.post('/mfa/setup', denySupport, async (req, res) => {
   if (req.user.mfa_enabled) throw new HttpError(409, 'A verificação em duas etapas já está ligada.');
   const secret = newSecret();
   await q('update users set mfa_pending_secret=$2 where id=$1', [req.user.id, seal(secret, 'mfa')]);
   res.json({ secret, otpauth_url: otpauthUrl(secret, req.user.email) });
 });
 
-r.post('/mfa/enable', async (req, res) => {
+r.post('/mfa/enable', denySupport, async (req, res) => {
   const d = parse(z.object({ code: z.string().trim().min(6).max(10) }), req.body);
   await limitByKey('mfa-enable', req.user.id, 6, 600, res);
   const u = await one('select mfa_pending_secret from users where id=$1', [req.user.id]);
@@ -179,7 +182,7 @@ r.post('/mfa/enable', async (req, res) => {
   res.json({ recovery_codes: codes });
 });
 
-r.post('/mfa/disable', async (req, res) => {
+r.post('/mfa/disable', denySupport, async (req, res) => {
   const d = parse(z.object({ password: z.string().min(1).max(200) }), req.body);
   await limitByKey('mfa-disable', req.user.id, 5, 900, res);
   const u = await one('select password_hash from users where id=$1', [req.user.id]);

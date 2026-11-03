@@ -71,3 +71,7 @@ export function passwordProblem(p) {
   if (/^(.)\1+$/.test(s) || /^(1234567890|0123456789|senha12345|password12)/i.test(s)) return 'Escolha uma senha menos óbvia.';
   return null;
 }
+
+/** Endereços e nome reservados ao usuário master e ao suporte: nenhuma conta comum pode usá-los. */
+export const isReservedEmail = (e) => { const v = String(e || '').trim().toLowerCase(); return v.endsWith('@master.lorler') || v.endsWith('.invalid'); };
+export const isReservedName = (n) => String(n || '').trim().toLowerCase() === 'suporter2l2';

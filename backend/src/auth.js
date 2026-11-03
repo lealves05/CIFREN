@@ -24,10 +24,11 @@ function setCookie(res, value, maxAge) {
 
 export async function createSession(res, req, user, orgId, ecosystem = null) {
   const token = randomToken(32);
-  const maxAge = ecosystem ? 8 * 3600 : MAX_AGE_S; // sessão do usuário master: no máximo 8 horas
+  // sessão do usuário master: o prazo vem do login na central e trocar de organização não o estende
+  const maxAge = ecosystem ? Math.max(1, Number(ecosystem.until) - Math.floor(Date.now() / 1000)) : MAX_AGE_S;
   await q(`insert into sessions (user_id, org_id, token_hash, auth_version, expires_at, ip, user_agent, ecosystem)
            values ($1,$2,$3,$4, now() + make_interval(secs => $5), $6, $7, $8)`,
-  [user.id, orgId, sha256(token), user.auth_version, maxAge, req.ip || null, String(req.headers['user-agent'] || '').slice(0, 200), ecosystem ? JSON.stringify({ sv: ecosystem.sv, name: ecosystem.name }) : null]);
+  [user.id, orgId, sha256(token), user.auth_version, maxAge, req.ip || null, String(req.headers['user-agent'] || '').slice(0, 200), ecosystem ? JSON.stringify({ sv: ecosystem.sv, until: ecosystem.until, name: ecosystem.name }) : null]);
   await q('update users set last_login_at = now() where id = $1', [user.id]);
   if (orgId) await q('update memberships set last_login_at = now() where user_id = $1 and org_id = $2', [user.id, orgId]);
   setCookie(res, token, maxAge);
@@ -57,11 +58,16 @@ export async function requireAuth(req, _res, next) {
   if (!s || !s.active || s.auth_version !== s.user_av || Date.now() - new Date(s.last_seen_at).getTime() > IDLE_MS) {
     throw new HttpError(401, 'Sessão encerrada. Entre novamente.');
   }
-  if (s.ecosystem) { const { ecoGuard } = await import('./ecosystem.js'); await ecoGuard(s.ecosystem.sv); }
+  if (s.ecosystem) { const { ecoGuard } = await import('./ecosystem.js'); await ecoGuard(s.ecosystem.sv, s.ecosystem.until); }
   req.ecosystem = s.ecosystem || null;
   let m = s.org_id ? await one(`select m.org_id, m.company_ids, r.key as role_key, r.name as role_name, r.permissions, o.name as org_name, o.require_mfa
                                   from memberships m join roles r on r.id = m.role_id join organizations o on o.id = m.org_id
                                  where m.user_id = $1 and m.org_id = $2 and m.active`, [s.user_id, s.org_id]) : null;
+  if (!m && s.ecosystem) {
+    // sessão master nunca muda de organização sozinha: sem vínculo aqui, ela termina
+    await q('update sessions set revoked_at = now() where id = $1', [s.id]);
+    throw new HttpError(401, 'Acesso master encerrado nesta organização. Entre novamente.');
+  }
   if (!m) {
     m = await one(`select m.org_id, m.company_ids, r.key as role_key, r.name as role_name, r.permissions, o.name as org_name, o.require_mfa
                      from memberships m join roles r on r.id = m.role_id join organizations o on o.id = m.org_id

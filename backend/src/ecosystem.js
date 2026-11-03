@@ -25,21 +25,33 @@ export const ecoMfa = (mfa_token, code, ip) => central('mfa', { mfa_token, code,
 
 // a sessão aberta é conferida na central a cada 5 minutos: desativar no Master encerra em pouco tempo, e central fora do ar não mantém o acesso
 const checked = new Map();
-export async function ecoGuard(sv) {
+const inflight = new Map();
+export async function ecoGuard(sv, until) {
+  if (!until || Number(until) * 1000 <= Date.now()) throw new HttpError(401, 'Acesso master encerrado. Entre novamente.');
   const at = checked.get(sv) || 0;
   if (Date.now() - at < 5 * 60 * 1000) return;
-  let valid = false;
-  try { valid = !!(await central('check', { sv })).valid; } catch { valid = false; }
-  if (!valid) { checked.delete(sv); throw new HttpError(401, 'Acesso master encerrado. Entre novamente.'); }
+  // requisições simultâneas compartilham a mesma conferência; o nonce evita assinatura repetida entre instâncias
+  let check = inflight.get(sv);
+  if (!check) {
+    check = central('check', { sv, nonce: crypto.randomUUID() }).then((x) => !!x.valid).catch(() => false).finally(() => inflight.delete(sv));
+    inflight.set(sv, check);
+  }
+  if (!(await check)) { checked.delete(sv); throw new HttpError(401, 'Acesso master encerrado. Entre novamente.'); }
   checked.set(sv, Date.now());
 }
 
 async function supportUser() {
-  const cur = await one('select id, name, email, auth_version from users where is_support limit 1');
-  if (cur) return cur;
+  const cur = await one('select id, name, email, auth_version, active from users where is_support limit 1');
+  if (cur) {
+    if (!cur.active) await q('update users set active = true where id = $1', [cur.id]);
+    return cur;
+  }
   const hash = await bcrypt.hash(`!${crypto.randomBytes(24).toString('base64url')}`, 10); // nunca conhecida: login normal é impossível
-  return one(`insert into users (name, email, password_hash, is_support, active) values ($1,$2,$3,true,true)
-              on conflict (lower(email)) do update set active = true returning id, name, email, auth_version`, [SUPPORT_USER_NAME, SUPPORT_EMAIL, hash]);
+  const u = await one(`insert into users (name, email, password_hash, is_support, active) values ($1,$2,$3,true,true)
+              on conflict (lower(email)) do nothing returning id, name, email, auth_version`, [SUPPORT_USER_NAME, SUPPORT_EMAIL, hash]);
+  // o e-mail reservado está com outra conta: nunca usar essa conta como suporte
+  if (!u) throw new HttpError(409, 'O endereço reservado do suporte está em uso por outra conta. Avise a administração da plataforma.');
+  return u;
 }
 
 /** Organização própria do usuário master, criada na primeira entrada. */

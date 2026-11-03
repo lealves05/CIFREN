@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { q, one, orgTx } from '../db.js';
-import { HttpError, parse, notFound, uuidParam, isUuid, limitParam, encodeCursor, decodeCursor } from '../util.js';
+import { isReservedEmail, isReservedName, HttpError, parse, notFound, uuidParam, isUuid, limitParam, encodeCursor, decodeCursor } from '../util.js';
 import { need, can, revokeSessions } from '../auth.js';
 import { CATALOG, ALL, isKnown } from '../permissions.js';
 import { audit } from '../audit.js';
@@ -136,6 +136,8 @@ users.get('/', async (req, res) => {
 users.post('/', async (req, res) => {
   const d = parse(z.object({ name: text(120).min(2, 'informe o nome'), email: z.string().trim().toLowerCase().email('e-mail inválido').max(200),
     role_key: z.string().max(60), company_ids: z.array(z.string()).max(200).nullable().optional() }), req.body);
+  if (isReservedEmail(d.email)) throw new HttpError(400, 'Este e-mail não pode ser usado.');
+  if (isReservedName(d.name)) throw new HttpError(400, 'Este nome é reservado.');
   await limitByKey('invite', req.orgId, 30, 3600, res);
   const role = await roleByKey(req, d.role_key);
   const companyIds = await validCompanies(req, d.company_ids === undefined ? null : d.company_ids);
@@ -151,11 +153,13 @@ users.post('/', async (req, res) => {
   await orgTx(req.orgId, (db) => audit(db, { actor: actor(req), req, action: 'usuario.convidado', entity: 'user', entityId: u.id, summary: `${d.name} (${d.email}) como ${role.name}` }));
   res.status(201).json({ id: u.id, temporary_password, existing_account: !temporary_password });
 });
+const notSupport = async (id) => { if (await one('select 1 from users where id=$1 and is_support', [id])) throw notFound('Usuário não encontrado.'); };
 async function ownersLeft(req, exceptUserId) {
   return (await one(`select count(*)::int as n from memberships m join roles r on r.id=m.role_id join users u on u.id=m.user_id where m.org_id=$1 and r.key='dono' and m.active and not u.is_support and m.user_id<>$2`, [req.orgId, exceptUserId])).n;
 }
 users.put('/:id', async (req, res) => {
   const id = uuidParam(req.params.id);
+  await notSupport(id);
   const d = parse(z.object({ role_key: z.string().max(60).optional(), company_ids: z.array(z.string()).max(200).nullable().optional(), active: z.boolean().optional() }), req.body);
   const cur = await one(`select m.id, r.key as role_key, r.permissions, u.name from memberships m join roles r on r.id=m.role_id join users u on u.id=m.user_id
                           where m.org_id=$1 and m.user_id=$2`, [req.orgId, id]);
@@ -177,6 +181,7 @@ users.put('/:id', async (req, res) => {
 });
 users.post('/:id/reset-password', async (req, res) => {
   const id = uuidParam(req.params.id);
+  await notSupport(id);
   const cur = await one('select r.permissions, u.name from memberships m join roles r on r.id=m.role_id join users u on u.id=m.user_id where m.org_id=$1 and m.user_id=$2', [req.orgId, id]);
   if (!cur) throw notFound('Usuário não encontrado.');
   assertGrantable(req, cur.permissions);
