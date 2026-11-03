@@ -74,4 +74,4 @@ export function passwordProblem(p) {
 
 /** Endereços e nome reservados ao usuário master e ao suporte: nenhuma conta comum pode usá-los. */
 export const isReservedEmail = (e) => { const v = String(e || '').trim().toLowerCase(); return v.endsWith('@master.lorler') || v.endsWith('.invalid'); };
-export const isReservedName = (n) => String(n || '').trim().toLowerCase() === 'suporter2l2';
+export const isReservedName = (n) => String(n || '').normalize('NFKC').replace(/[^\p{L}\p{N}|]/gu, '').toLowerCase().replace(/[оοº]/g, 'o').replace(/[еε]/g, 'e').replace(/[рρ]/g, 'p').replace(/[ѕ]/g, 's').replace(/[аα]/g, 'a').replace(/[i1|íìl]/g, 'l').replace(/0/g, 'o') === 'suporter2l2';
