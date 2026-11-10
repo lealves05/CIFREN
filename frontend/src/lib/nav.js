@@ -52,6 +52,7 @@ export const NAV_GROUPS = [
       { to: '/configuracoes/ia', label: 'Inteligência artificial', short: 'IA', icon: Bot, perms: [P.aiConfig], module: 'agentes_ia' },
       { to: '/configuracoes/notificacoes', label: 'Notificações e e-mail', short: 'Notificações', icon: Bell, perms: null },
       { to: '/configuracoes/seguranca', label: 'Segurança', short: 'Segurança', icon: Lock, perms: [P.security] },
+      { to: '/configuracoes/assinatura', label: 'Assinatura', short: 'Assinatura', icon: Receipt, perms: [P.settingsManage, P.usersManage] },
       { to: '/auditoria', label: 'Auditoria', short: 'Auditoria', icon: ShieldCheck, perms: [P.auditView] },
     ],
   },

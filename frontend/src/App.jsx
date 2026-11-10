@@ -17,6 +17,7 @@ const Companies = lazy(() => import('./pages/Companies'));
 const Users = lazy(() => import('./pages/Users'));
 const Audit = lazy(() => import('./pages/Audit'));
 const Account = lazy(() => import('./pages/Account'));
+const Subscription = lazy(() => import('./pages/Subscription'));
 const More = lazy(() => import('./pages/More'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 const Overview = lazy(() => import('./pages/Overview'));
@@ -113,6 +114,7 @@ export default function App() {
             <Route path="configuracoes/notificacoes" element={<NotificationSettings />} />
             <Route path="configuracoes/integracoes" element={<Allow perms={[P.integrations]} module="integracoes_lorler"><Integrations /></Allow>} />
             <Route path="configuracoes/seguranca" element={<Allow perms={[P.security]}><Security /></Allow>} />
+            <Route path="configuracoes/assinatura" element={<Allow perms={[P.settingsManage, P.usersManage]}><Subscription /></Allow>} />
             <Route path="configuracoes/alcadas" element={<Allow perms={[P.approvalRules]}><ApprovalRules /></Allow>} />
             <Route path="visao-geral" element={<Overview />} />
             <Route path="suporte" element={<Support />} />
