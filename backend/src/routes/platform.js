@@ -6,7 +6,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { q, one, tx, orgTx } from '../db.js';
 import { parse, HttpError, notFound, isUuid } from '../util.js';
-import { FEATURES, verifyHubRequest, tenantPayload, storeAccess, accessFor, modulesFrom } from '../platform.js';
+import { FEATURES, verifyHubRequest, tenantPayload, storeAccess, accessFor, modulesFrom, hubCall, platformConfig } from '../platform.js';
 import { revokeSessions } from '../auth.js';
 import { audit } from '../audit.js';
 import { need } from '../auth.js';
@@ -85,7 +85,39 @@ platformApi.post('/tenants/:id/delete', async (req, res) => {
 
 // ---------------- portal da assinatura (/api/billing) ----------------
 export const billing = Router();
-billing.get('/', need('configuracoes.gerenciar', 'usuarios.gerenciar'), async (req, res) => {
+const manage = need('configuracoes.gerenciar', 'usuarios.gerenciar');
+const hubActor = (req) => ({ user_email: req.user?.email || null, user_name: req.user?.name || null });
+const rid = (req) => encodeURIComponent(req.orgId);
+/** Portal da assinatura: plano, cobranças e o Pix pendente (QR Code e copia e cola) vindos da central. */
+billing.get('/', manage, async (req, res) => {
   const access = await accessFor(req.orgId);
-  res.json({ access, modules: modulesFrom(access) });
+  if (!(await platformConfig())) return res.json({ access, modules: modulesFrom(access), hub: false });
+  const out = await hubCall('GET', `/tenants/${rid(req)}/billing`);
+  if (out.access) await storeAccess(req.orgId, out.access);
+  res.json({ ...out, modules: modulesFrom(out.access || access), hub: true });
 });
+billing.post('/checkout', manage, async (req, res) => {
+  const d = parse(z.object({ plan_id: z.string().uuid(), cycle: z.enum(['MONTHLY', 'ANNUAL']), method: z.enum(['CARD', 'PIX']).optional() }), req.body);
+  const out = await hubCall('POST', `/tenants/${rid(req)}/billing/checkout`, { ...d, ...hubActor(req) });
+  await orgTx(req.orgId, (db) => audit(db, { actor: { id: req.user?.id || null, name: req.user?.name || null }, req, action: 'assinatura.contratacao', entity: 'organization', entityId: req.orgId,
+    summary: `Contratação da assinatura (${d.cycle === 'ANNUAL' ? 'anual' : 'mensal'}${d.method === 'PIX' ? ', Pix' : ''})` })).catch(() => {});
+  res.status(201).json(out);
+});
+billing.post('/renew', manage, async (req, res) => {
+  const d = parse(z.object({ method: z.enum(['CARD', 'PIX']).optional() }), req.body || {});
+  res.status(201).json(await hubCall('POST', `/tenants/${rid(req)}/billing/renew`, { ...d, ...hubActor(req) }));
+});
+billing.post('/change-plan', manage, async (req, res) => {
+  const d = parse(z.object({ plan_id: z.string().uuid() }), req.body);
+  const out = await hubCall('POST', `/tenants/${rid(req)}/billing/change-plan`, { ...d, ...hubActor(req) });
+  await accessFor(req.orgId, { fresh: true });
+  res.json(out);
+});
+billing.post('/cancel', manage, async (req, res) => {
+  parse(z.object({ confirm: z.literal(true, { errorMap: () => ({ message: 'confirme o cancelamento' }) }) }), req.body);
+  const out = await hubCall('POST', `/tenants/${rid(req)}/billing/cancel`, { confirm: true, ...hubActor(req) });
+  await accessFor(req.orgId, { fresh: true });
+  res.json(out);
+});
+/** Confere a situação na central (depois de pagar). */
+billing.post('/refresh', async (req, res) => res.json({ access: await accessFor(req.orgId, { fresh: true }) }));
