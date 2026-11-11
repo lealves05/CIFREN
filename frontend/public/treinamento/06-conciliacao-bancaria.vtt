@@ -1,0 +1,37 @@
+WEBVTT
+
+1
+00:00:00.153 --> 00:00:12.072
+Aula 6: Conciliação bancária: conferir o extrato. Nesta aula você vai aprender: Baixar o extrato no banco e importar; Conciliar automaticamente e conferir; Lançar o que faltava, como a tarifa.
+
+2
+00:00:13.709 --> 00:00:20.956
+Conciliar é conferir o extrato do banco com o que foi lançado. Baixe o extrato no banco, em OFX ou CSV.
+
+3
+00:00:24.886 --> 00:00:29.445
+Em Conciliação, escolha a conta bancária e clique em Importar extrato.
+
+4
+00:00:32.985 --> 00:00:39.806
+Escolha o arquivo do extrato. As linhas aparecem com a sugestão de qual conta lançada corresponde a cada uma.
+
+5
+00:00:44.969 --> 00:00:52.088
+Clique em Conciliar automaticamente. Ele liga só o que tem o valor exato e certeza alta: a energia e o aluguel.
+
+6
+00:00:56.886 --> 00:01:04.560
+A tarifa do banco não estava lançada. Clique em Criar lançamento: a conta nasce já paga, com a data e o valor do extrato.
+
+7
+00:01:11.488 --> 00:01:18.117
+Escolha a categoria, Taxas bancárias, e confirme. Na aba Conciliadas, tudo o que já bate com o banco.
+
+8
+00:01:18.601 --> 00:01:23.928
+Lembre: importe o extrato toda semana. Assim o saldo do CIFREN é o mesmo do banco.
+
+9
+00:01:24.496 --> 00:01:36.117
+Recapitulando: Baixar o extrato no banco e importar; Conciliar automaticamente e conferir; Lançar o que faltava, como a tarifa. Se precisar, assista de novo quando quiser. Até a próxima aula!

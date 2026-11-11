@@ -357,8 +357,8 @@ export const LESSONS = [
   // ───────────────────────── 13. Usuários e perfis
   {
     n: 13, file: '13-usuarios-e-perfis', mod: 'config', title: 'Usuários e perfis: quem pode o quê', routes: ['/usuarios'], start: '/',
-    desc: 'Convidar a equipe, escolher o perfil de cada pessoa e limitar a quais empresas ela tem acesso.',
-    learn: ['Convidar um usuário', 'Escolher o perfil', 'Limitar as empresas'],
+    desc: 'Convidar a equipe, escolher o perfil de cada pessoa e ver o que cada perfil pode fazer.',
+    learn: ['Convidar um usuário', 'Escolher o perfil', 'O que cada perfil pode fazer'],
     steps: [
       { tag: 'Para que serve', act: (h) => h.card(slide('Usuários e perfis', 'Cada um vê o que precisa', slist(['<b>Dono</b> e <b>Administrador</b>: tudo.', '<b>Financeiro</b>, <b>Lançamentos</b>, <b>Aprovador</b>, <b>Contador</b>…', 'E a quais empresas cada pessoa tem acesso.']))),
         say: ['Cada pessoa da equipe tem o próprio login e um perfil, que define o que ela pode ver e fazer.'] },
@@ -382,9 +382,9 @@ export const LESSONS = [
         say: ['No menu, clique em Suporte. As vídeo-aulas ficam aqui, com legenda na imagem e o texto da aula embaixo.'] },
       { act: async (h) => { await h.unspot(); const b = h.page.getByLabel('Buscar aula'); await h.center(b); await h.type(b, 'extrato', { delay: 70 }); await h.sleep(600); await h.spot(b.locator('xpath=ancestor::aside[1]')); },
         say: ['Na busca, digite um assunto ou uma frase da aula. Abaixo do vídeo, escolha a velocidade.'] },
-      { tag: 'O assistente', act: async (h) => { await h.unspot(); await h.top(); const b = h.page.getByRole('button', { name: /Falar com/ }).locator('visible=true').first(); await h.spot(b); await h.click(b, { wait: 1800 }); await h.spot(h.page.getByLabel('Sua mensagem').locator('xpath=ancestor::*[contains(@class,"fixed") or @role="dialog"][1]')); },
+      { tag: 'O assistente', act: async (h) => { await h.unspot(); await h.top(); const b = h.page.getByRole('button', { name: /Falar com/ }).locator('visible=true').first(); await h.spot(b); await h.click(b, { wait: 1800 }); await h.spot(h.page.getByRole('dialog', { name: 'Chat com o assistente' })); },
         say: ['Toque em Falar com o assistente. Ele é da Central de Atendimento LORLER e responde na hora.'] },
-      { act: async (h) => { await h.type(h.page.getByLabel('Sua mensagem'), 'Como confiro o extrato do banco?', { delay: 45 }); await h.click(h.page.getByRole('button', { name: 'Enviar' }), { wait: 600 }); const r = h.page.getByText('Conciliar automaticamente', { exact: false }).last(); await r.waitFor({ timeout: 45000 }).catch(() => {}); await h.sleep(800); await h.spot(r.locator('xpath=ancestor::div[contains(@class,"rounded-2xl")][1]')); },
+      { act: async (h) => { await h.type(h.page.locator('#assistant-msg').last(), 'Como confiro o extrato do banco?', { delay: 45 }); await h.click(h.page.getByRole('button', { name: 'Enviar', exact: true }).last(), { wait: 600 }); const r = h.page.getByText('Conciliar automaticamente', { exact: false }).last(); await r.waitFor({ timeout: 45000 }).catch(() => {}); await h.sleep(800); await h.spot(r.locator('xpath=ancestor::div[contains(@class,"rounded-2xl")][1]')); },
         say: ['Escreva do seu jeito. Ele responde com o passo a passo e indica a aula. Se precisar, chama a equipe de suporte.'] },
       { tag: 'Cuidado', act: async (h) => { await h.unspot(); await h.card(slide('No chat', 'Nunca mande dados sensíveis', slist(['Não envie <b>senhas</b>, códigos nem números de <b>cartão</b>.', 'Ajustes na sua conta só com a sua autorização.', 'O <b>Assistente IA</b> do menu é outro: responde sobre os seus números.']))); },
         say: ['No chat, nunca envie senhas, códigos nem cartões. E o Assistente IA do menu é outro: ele responde sobre os números da sua organização.'] },
