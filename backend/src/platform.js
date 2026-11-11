@@ -54,11 +54,31 @@ export const clearPlatformConfig = () => { cfgCache.at = 0; };
 const sha = (s) => crypto.createHash('sha256').update(s || '').digest('hex');
 const sign = (secret, ts, method, route, body) => crypto.createHmac('sha256', secret).update(`${ts}\n${method.toUpperCase()}\n${route}\n${sha(body)}`).digest('hex');
 
+/**
+ * Segundo (timestamp) para assinar a chamada à central. A MESMA chamada (método, rota e corpo) no mesmo segundo teria a
+ * mesma assinatura, e a central a recusa como repetição ("Chamada da plataforma não autenticada") — p.ex. a tela de
+ * assinatura e a confirmação do Pix pedindo a cobrança juntas. Então a segunda espera o segundo seguinte (a central faz
+ * o mesmo nas chamadas dela). Conferir e gravar acontecem sem await no meio: duas chamadas simultâneas nunca pegam o mesmo segundo.
+ * @type {Map<string, number>}
+ */
+const lastSigned = new Map();
+export async function signSecond(key) {
+  for (;;) {
+    const ts = Math.floor(Date.now() / 1000);
+    if (lastSigned.get(key) !== ts) {
+      lastSigned.set(key, ts);
+      if (lastSigned.size > 500) for (const [k, v] of lastSigned) if (v < ts - 5) lastSigned.delete(k);
+      return ts;
+    }
+    await new Promise((r) => setTimeout(r, 1000 - (Date.now() % 1000) + 5));
+  }
+}
+
 export async function hubCall(method, route, payload, timeoutMs = 10000) {
   const cfg = await platformConfig();
   if (!cfg) throw new HttpError(503, 'A assinatura ainda não está configurada nesta instalação.', { code: 'PLATFORM_NOT_CONFIGURED' });
   const body = payload === undefined ? '' : JSON.stringify(payload);
-  const ts = Math.floor(Date.now() / 1000);
+  const ts = await signSecond(`${method} ${route} ${body}`);
   let res;
   try {
     res = await fetch(`${cfg.hub}/api/hub/v1${route}`, {
