@@ -6,6 +6,8 @@ import { P } from '../lib/permissions';
 import { supportChat, assistantName } from '../lib/supportChat';
 import { PageHeader } from '../components/ui';
 import { AssistantLauncher, AssistantPanel } from '../components/AssistantChat';
+import Training from '../components/Training';
+import { LESSONS } from '../lib/training';
 
 /**
  * Suporte do CIFREN: conversa com o assistente da Central de Atendimento LORLER (IA, com atendente da equipe quando precisa).
@@ -32,9 +34,10 @@ export default function Support() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Suporte" icon={LifeBuoy} subtitle="Tire dúvidas sobre o CIFREN, a assinatura e as configurações com a equipe LORLER." />
+      <PageHeader title="Suporte e treinamento" icon={LifeBuoy} subtitle="Tire dúvidas sobre o CIFREN, a assinatura e as configurações com a equipe LORLER, e assista às vídeo-aulas." />
       <AssistantLauncher name={name} onOpen={() => setChat(true)} />
       {chatOpen && <AssistantPanel client={supportChat} userName={user?.name} onClose={close} />}
+      {LESSONS.length > 0 && <Training userId={user?.id} />}
 
       <section aria-labelledby="outras-ajudas">
         <h2 id="outras-ajudas" className="mb-1.5 px-1 text-xs font-semibold uppercase tracking-wider text-ink-faint">Outras formas de ajuda</h2>
