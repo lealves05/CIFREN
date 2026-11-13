@@ -56,11 +56,11 @@ export async function requireAuth(req, _res, next) {
   if (!s || !s.active || s.auth_version !== s.user_av || Date.now() - new Date(s.last_seen_at).getTime() > IDLE_MS) {
     throw new HttpError(401, 'Sessão encerrada. Entre novamente.');
   }
-  let m = s.org_id ? await one(`select m.org_id, m.company_ids, r.key as role_key, r.name as role_name, r.permissions, o.name as org_name, o.require_mfa
+  let m = s.org_id ? await one(`select m.org_id, m.company_ids, m.perm_add, m.perm_remove, r.key as role_key, r.name as role_name, r.permissions, o.name as org_name, o.require_mfa
                                   from memberships m join roles r on r.id = m.role_id join organizations o on o.id = m.org_id
                                  where m.user_id = $1 and m.org_id = $2 and m.active`, [s.user_id, s.org_id]) : null;
   if (!m) {
-    m = await one(`select m.org_id, m.company_ids, r.key as role_key, r.name as role_name, r.permissions, o.name as org_name, o.require_mfa
+    m = await one(`select m.org_id, m.company_ids, m.perm_add, m.perm_remove, r.key as role_key, r.name as role_name, r.permissions, o.name as org_name, o.require_mfa
                      from memberships m join roles r on r.id = m.role_id join organizations o on o.id = m.org_id
                     where m.user_id = $1 and m.active order by m.created_at limit 1`, [s.user_id]);
     if (!m) throw new HttpError(403, 'Seu acesso a esta organização foi removido. Fale com o administrador.');
@@ -72,7 +72,8 @@ export async function requireAuth(req, _res, next) {
   req.orgId = m.org_id;
   req.org = { id: m.org_id, name: m.org_name, require_mfa: !!m.require_mfa };
   req.role = { key: m.role_key, name: m.role_name };
-  req.perms = new Set(m.permissions || []);
+  // visão por usuário: o efetivo é (perfil ∪ liberações) − bloqueios. O Dono mantém sempre tudo (não dá para se trancar fora).
+  req.perms = effectivePerms(m);
   req.companyScope = m.company_ids && m.company_ids.length ? m.company_ids : null;
   next();
 }
@@ -81,6 +82,15 @@ export async function requireAuth(req, _res, next) {
 export function mfaGate(req, _res, next) {
   if (req.org?.require_mfa && !req.user?.mfa_enabled) throw new HttpError(403, 'Sua organização exige a verificação em duas etapas. Ligue em Minha conta para continuar.', { code: 'MFA_SETUP_REQUIRED' });
   next();
+}
+
+/** Permissões efetivas de uma associação: perfil + liberações individuais − bloqueios individuais (o Dono tem sempre tudo). */
+export function effectivePerms(m) {
+  if (m.role_key === 'dono') return new Set(m.permissions || []);
+  const set = new Set(m.permissions || []);
+  for (const p of m.perm_add || []) set.add(p);
+  for (const p of m.perm_remove || []) set.delete(p);
+  return set;
 }
 
 export const can = (req, code) => req.perms?.has(code);

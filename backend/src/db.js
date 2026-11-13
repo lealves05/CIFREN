@@ -35,6 +35,34 @@ export async function tx(fn) {
   } finally { client.release(); }
 }
 
+
+/**
+ * Transação das finanças pessoais: define app.user_id (local à transação). A RLS das tabelas personal_* só mostra
+ * espaços em que este usuário é membro ativo. Entrega { query, one, all, userId }.
+ */
+export async function personalTx(userId, fn) {
+  if (!UUID.test(String(userId || ''))) throw new Error('usuário inválido');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query("select set_config('app.user_id', $1, true)", [userId]);
+    // e-mail do usuário (local à transação): usado só para o convidado por e-mail enxergar o NOME do espaço convidado (nunca o financeiro)
+    await client.query("select set_config('app.user_email', coalesce((select lower(email) from users where id = $1::uuid), ''), true)", [userId]);
+    const db = {
+      query: (t, p) => client.query(t, p),
+      one: async (t, p) => (await client.query(t, p)).rows[0] || null,
+      all: async (t, p) => (await client.query(t, p)).rows,
+      userId,
+    };
+    const r = await fn(db);
+    await client.query('COMMIT');
+    return r;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally { client.release(); }
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**

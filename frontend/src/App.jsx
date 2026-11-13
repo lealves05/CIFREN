@@ -40,6 +40,7 @@ const AiSettings = lazy(() => import('./pages/settings/AiSettings'));
 const NotificationSettings = lazy(() => import('./pages/settings/NotificationSettings'));
 const Integrations = lazy(() => import('./pages/settings/Integrations'));
 const Security = lazy(() => import('./pages/settings/Security'));
+const Personal = lazy(() => import('./pages/Personal'));
 const ApprovalRules = lazy(() => import('./pages/settings/ApprovalRules'));
 
 function Splash() {
@@ -94,6 +95,7 @@ export default function App() {
             <Route path="pagar" element={<Allow perms={[P.titlesView]} module="financeiro"><Titles kind="pagar" key="pagar" /></Allow>} />
             <Route path="receber" element={<Allow perms={[P.titlesView]} module="financeiro"><Titles kind="receber" key="receber" /></Allow>} />
             <Route path="cadastros" element={<Allow perms={[P.registryView, P.registryManage, P.accountsManage]}><Cadastros /></Allow>} />
+            <Route path="pessoal" element={<Personal />} />
             <Route path="empresas" element={<Allow perms={[P.companiesManage]}><Companies /></Allow>} />
             <Route path="usuarios" element={<Allow perms={[P.usersManage, P.rolesManage]}><Users /></Allow>} />
             <Route path="auditoria" element={<Allow perms={[P.auditView]}><Audit /></Allow>} />

@@ -26,7 +26,7 @@ export default function Users() {
       <div className="card">
         {tabs.length > 1 && <Tabs label="Usuários e perfis" tabs={tabs} value={tab} onChange={setTab} className="px-2" />}
         <div className="p-4" role="tabpanel">
-          {tab === 'usuarios' && <UsersTab roles={roles.data?.roles || []} />}
+          {tab === "usuarios" && <UsersTab roles={roles.data?.roles || []} catalog={roles.data?.catalog || []} />}
           {tab === 'perfis' && (roles.loading && !roles.data ? <Loading /> : roles.error ? <ErrorState error={roles.error} onRetry={roles.reload} /> : <RolesTab data={roles.data} reload={roles.reload} />)}
         </div>
       </div>

@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, ArrowUpFromLine, ArrowDownToLine, FolderOpen, Building2, Users, ShieldCheck, UserRound,
   Wallet, ClipboardCheck, Landmark, Repeat, ShoppingCart, Receipt, FileText, BarChart3, LineChart, Table2,
-  Target, AlarmClock, Download, Sparkles, Settings, Plug, Bot, Bell, Lock, Scale, Map as MapIcon, ShoppingBag, HandCoins, LifeBuoy,
+  Target, AlarmClock, Download, Sparkles, Settings, Plug, Bot, Bell, Lock, Scale, Map as MapIcon, ShoppingBag, HandCoins, LifeBuoy, PiggyBank,
 } from 'lucide-react';
 import { P, APPROVER_PERMS } from './permissions';
 
@@ -42,6 +42,7 @@ export const NAV_GROUPS = [
   },
   { key: 'ia', items: [{ to: '/assistente', label: 'Assistente IA', short: 'Assistente', icon: Sparkles, perms: [P.aiUse, P.dashboard] }] },
   { key: 'cadastros', items: [{ to: '/cadastros', label: 'Cadastros', short: 'Cadastros', icon: FolderOpen, perms: [P.registryView, P.registryManage, P.accountsManage] }] },
+  { key: 'pessoal', items: [{ to: '/pessoal', label: 'Finanças pessoais', short: 'Pessoal', icon: PiggyBank, perms: null }] },
   {
     key: 'config', label: 'Configurações', icon: Settings,
     items: [

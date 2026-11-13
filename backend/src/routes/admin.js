@@ -5,7 +5,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { q, one, orgTx } from '../db.js';
 import { HttpError, parse, notFound, uuidParam, isUuid, limitParam, encodeCursor, decodeCursor } from '../util.js';
-import { need, can, revokeSessions } from '../auth.js';
+import { need, can, revokeSessions, effectivePerms } from '../auth.js';
 import { CATALOG, ALL, isKnown } from '../permissions.js';
 import { audit } from '../audit.js';
 import { limitByKey } from '../security.js';
@@ -127,18 +127,40 @@ async function validCompanies(req, ids) {
   if (req.companyScope && !list.every((id) => req.companyScope.includes(id))) throw new HttpError(403, 'Você só pode dar acesso às empresas que você mesmo acessa.');
   return list;
 }
+// valida os ajustes de visão por usuário (liberar/bloquear permissões sobre o perfil)
+function validOverrides(req, rolePerms, d) {
+  const roleSet = new Set(rolePerms || []);
+  const add = [...new Set(d.perm_add || [])];
+  const remove = [...new Set(d.perm_remove || [])];
+  for (const c of [...add, ...remove]) if (!isKnown(c)) throw new HttpError(400, 'Permissão desconhecida.', { permissions: [c] });
+  // só faz sentido liberar o que o perfil não tem, e bloquear o que o perfil tem
+  const addNet = add.filter((c) => !roleSet.has(c));
+  const removeNet = remove.filter((c) => roleSet.has(c));
+  assertGrantable(req, addNet); // ninguém libera permissão que o seu próprio perfil não tem
+  return { perm_add: addNet, perm_remove: removeNet };
+}
+
 users.get('/', async (req, res) => {
-  const { rows } = await q(`select u.id, u.name, u.email, r.key as role_key, r.name as role_name, m.company_ids, m.active, m.last_login_at, u.mfa_enabled, u.must_change_password
+  const { rows } = await q(`select u.id, u.name, u.email, r.key as role_key, r.name as role_name, r.permissions as role_permissions,
+                                   m.company_ids, m.perm_add, m.perm_remove, m.active, m.last_login_at, u.mfa_enabled, u.must_change_password
                               from memberships m join users u on u.id=m.user_id join roles r on r.id=m.role_id
                              where m.org_id=$1 order by m.active desc, u.name`, [req.orgId]);
-  res.json({ items: rows });
+  const items = rows.map((m) => ({
+    id: m.id, name: m.name, email: m.email, role_key: m.role_key, role_name: m.role_name,
+    role_permissions: m.role_permissions, perm_add: m.perm_add || [], perm_remove: m.perm_remove || [],
+    permissions: [...effectivePerms(m)].sort(), company_ids: m.company_ids, active: m.active,
+    last_login_at: m.last_login_at, mfa_enabled: m.mfa_enabled, must_change_password: m.must_change_password,
+  }));
+  res.json({ items });
 });
 users.post('/', async (req, res) => {
   const d = parse(z.object({ name: text(120).min(2, 'informe o nome'), email: z.string().trim().toLowerCase().email('e-mail inválido').max(200),
-    role_key: z.string().max(60), company_ids: z.array(z.string()).max(200).nullable().optional() }), req.body);
+    role_key: z.string().max(60), company_ids: z.array(z.string()).max(200).nullable().optional(),
+    perm_add: z.array(z.string().max(80)).max(200).optional(), perm_remove: z.array(z.string().max(80)).max(200).optional() }), req.body);
   await limitByKey('invite', req.orgId, 30, 3600, res);
   const role = await roleByKey(req, d.role_key);
   const companyIds = await validCompanies(req, d.company_ids === undefined ? null : d.company_ids);
+  const ov = validOverrides(req, role.permissions, d);
   let u = await one('select id, name from users where lower(email)=$1', [d.email]);
   let temporary_password = null;
   if (u) {
@@ -147,7 +169,7 @@ users.post('/', async (req, res) => {
     temporary_password = tempPassword();
     u = await one('insert into users (name, email, password_hash, must_change_password) values ($1,$2,$3,true) returning id, name', [d.name, d.email, await bcrypt.hash(temporary_password, 12)]);
   }
-  await q('insert into memberships (org_id, user_id, role_id, company_ids) values ($1,$2,$3,$4)', [req.orgId, u.id, role.id, companyIds]);
+  await q('insert into memberships (org_id, user_id, role_id, company_ids, perm_add, perm_remove) values ($1,$2,$3,$4,$5,$6)', [req.orgId, u.id, role.id, companyIds, ov.perm_add, ov.perm_remove]);
   // regra do ecossistema LORLER: a senha provisória vai por e-mail; só aparece na tela se o e-mail não sair
   let invite = { sent: false, error: null };
   if (temporary_password) {
@@ -161,21 +183,29 @@ async function ownersLeft(req, exceptUserId) {
 }
 users.put('/:id', async (req, res) => {
   const id = uuidParam(req.params.id);
-  const d = parse(z.object({ role_key: z.string().max(60).optional(), company_ids: z.array(z.string()).max(200).nullable().optional(), active: z.boolean().optional() }), req.body);
-  const cur = await one(`select m.id, r.key as role_key, r.permissions, u.name from memberships m join roles r on r.id=m.role_id join users u on u.id=m.user_id
+  const d = parse(z.object({ role_key: z.string().max(60).optional(), company_ids: z.array(z.string()).max(200).nullable().optional(), active: z.boolean().optional(),
+    perm_add: z.array(z.string().max(80)).max(200).optional(), perm_remove: z.array(z.string().max(80)).max(200).optional() }), req.body);
+  const cur = await one(`select m.id, r.key as role_key, r.permissions, m.perm_add, m.perm_remove, u.name from memberships m join roles r on r.id=m.role_id join users u on u.id=m.user_id
                           where m.org_id=$1 and m.user_id=$2`, [req.orgId, id]);
   if (!cur) throw notFound('Usuário não encontrado.');
-  assertGrantable(req, cur.permissions); // não mexe em quem tem mais poder que você
+  assertGrantable(req, [...effectivePerms(cur)]); // não mexe em quem tem mais poder que você (perfil + ajustes já aplicados)
   const isOwner = cur.role_key === 'dono';
   const demoting = isOwner && ((d.role_key && d.role_key !== 'dono') || d.active === false);
   if (demoting && (await ownersLeft(req, id)) === 0) throw new HttpError(409, 'A organização precisa de pelo menos um Dono ativo.');
   if (id === req.user.id && d.active === false) throw new HttpError(409, 'Você não pode desativar o próprio acesso.');
   const role = d.role_key ? await roleByKey(req, d.role_key) : null;
   const companyIds = 'company_ids' in d ? await validCompanies(req, d.company_ids) : undefined;
-  await q(`update memberships set role_id=coalesce($3,role_id), company_ids=case when $4::boolean then $5::uuid[] else company_ids end, active=coalesce($6,active)
-            where org_id=$1 and user_id=$2`, [req.orgId, id, role?.id ?? null, companyIds !== undefined, companyIds ?? null, d.active ?? null]);
-  if (d.active === false || role) {
-    await q('update sessions set revoked_at=now() where user_id=$1 and org_id=$2 and revoked_at is null', [id, req.orgId]); // perfil novo vale na hora
+  const hasOverrides = 'perm_add' in d || 'perm_remove' in d;
+  const rolePerms = role ? role.permissions : cur.permissions;
+  const ov = hasOverrides ? validOverrides(req, rolePerms, { perm_add: d.perm_add ?? cur.perm_add, perm_remove: d.perm_remove ?? cur.perm_remove }) : null;
+  await q(`update memberships set role_id=coalesce($3,role_id), company_ids=case when $4::boolean then $5::uuid[] else company_ids end, active=coalesce($6,active),
+            perm_add=case when $7::boolean then $8::text[] else perm_add end, perm_remove=case when $7::boolean then $9::text[] else perm_remove end
+            where org_id=$1 and user_id=$2`, [req.orgId, id, role?.id ?? null, companyIds !== undefined, companyIds ?? null, d.active ?? null,
+            !!ov, ov?.perm_add ?? null, ov?.perm_remove ?? null]);
+  if (d.active === false || role || hasOverrides) {
+    // o novo acesso vale na hora (derruba as sessões do alvo); ao editar a si mesmo, mantém a sessão atual (as permissões são recalculadas a cada requisição)
+    await q('update sessions set revoked_at=now() where user_id=$1 and org_id=$2 and revoked_at is null and ($3::uuid is null or id<>$3)',
+      [id, req.orgId, id === req.user.id ? req.sessionId : null]);
   }
   await orgTx(req.orgId, (db) => audit(db, { actor: actor(req), req, action: 'usuario.alterado', entity: 'user', entityId: id, summary: cur.name, data: d }));
   res.json({ ok: true });
