@@ -220,7 +220,7 @@ users.post('/:id/reset-password', async (req, res) => {
   const temporary_password = tempPassword();
   let invite = { sent: false, error: null };
   try { await sendTempPassword({ name: cur.name, email: cur.email }, req.org?.name, { password: temporary_password, reset: true }); invite = { sent: true, error: null }; } catch (e) { invite = { sent: false, error: e.message }; }
-  await q('update users set password_hash=$2, must_change_password=true, mfa_enabled=false, mfa_secret=null, recovery_codes=\'{}\' where id=$1', [id, await bcrypt.hash(temporary_password, 12)]);
+  await q('update users set password_hash=$2, must_change_password=true, mfa_enabled=false, mfa_secret=null, recovery_codes=\'{}\', failed_logins=0, locked_at=null, lock_auto_until=null, login_fail_log=\'[]\'::jsonb where id=$1', [id, await bcrypt.hash(temporary_password, 12)]);
   await revokeSessions(id);
   await orgTx(req.orgId, (db) => audit(db, { actor: actor(req), req, action: 'usuario.senha_redefinida', entity: 'user', entityId: id, summary: `${cur.name}; senha provisória ${invite.sent ? 'enviada por e-mail' : 'mostrada a quem redefiniu'}` }));
   res.json({ invite, ...(invite.sent ? {} : { temporary_password }) });

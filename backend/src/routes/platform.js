@@ -61,7 +61,7 @@ platformApi.post('/tenants/:id/owner-reset', async (req, res) => {
     throw new HttpError(409, 'O Dono usa a mesma conta em outra organização; peça que ele use "Esqueci a senha" ou troque em "Minha conta".');
   }
   const temp = `Cf-${crypto.randomBytes(6).toString('base64url')}-${crypto.randomInt(10, 99)}`;
-  await q('update users set password_hash=$2, must_change_password=true, active=true, auth_version=auth_version+1 where id=$1', [owner.id, await bcrypt.hash(temp, 12)]);
+  await q("update users set password_hash=$2, must_change_password=true, active=true, auth_version=auth_version+1, failed_logins=0, locked_at=null, lock_auto_until=null, login_fail_log='[]'::jsonb where id=$1", [owner.id, await bcrypt.hash(temp, 12)]);
   await revokeSessions(owner.id);
   await orgTx(o.id, (db) => audit(db, { actor: HUB, action: 'plataforma.senha_dono', entity: 'user', entityId: owner.id, summary: 'Senha provisória do Dono criada pela central' }));
   res.json({ ok: true, user_id: owner.id, email: owner.email, temporary_password: temp,
