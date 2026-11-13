@@ -12,6 +12,7 @@ import { seedOrganization } from '../permissions.js';
 import { audit } from '../audit.js';
 import { registerOrganization, accessFor, modulesFrom, platformMode } from '../platform.js';
 import { isEcoLogin, ecoLogin, ecoMfa, ecoEnter, ecoCompanies, SUPPORT_USER_NAME } from '../ecosystem.js';
+import { lockState, clearLock, onLoginFailure, consumeUnlockToken, unlockPage, unlockResultPage, LOCK_MESSAGE } from '../loginLock.js';
 
 const r = Router();
 const email = z.string().trim().toLowerCase().email('e-mail inválido').max(200);
@@ -56,11 +57,22 @@ r.post('/login', limitByIp('login', 20, 900), async (req, res) => {
     const eco = await ecoLogin(d.email, d.password, req.ip);
     return res.json({ mfa_required: true, mfa_token: eco.mfa_token, ecosystem: true });
   }
-  await limitByKey('login', d.email, 8, 900, res, 'Muitas tentativas para este e-mail. Aguarde 15 minutos.');
-  const u = await one('select id, name, email, password_hash, active, is_support, mfa_enabled, auth_version from users where lower(email) = $1', [d.email]);
+  await limitByKey('login', d.email, 20, 900, res, 'Muitas tentativas para este e-mail. Aguarde alguns minutos.');
+  const u = await one('select id, name, email, password_hash, active, is_support, mfa_enabled, auth_version, failed_logins, locked_at, lock_auto_until from users where lower(email) = $1', [d.email]);
   const ok = await bcrypt.compare(d.password, u?.password_hash || DUMMY_HASH);
-  if (!u || !ok || !u.active || u.is_support) throw new HttpError(401, 'E-mail ou senha incorretos.'); // suporte nunca entra por senha
+  // bloqueio persistente por conta: resposta idêntica com senha certa ou errada (não revela se a senha estava correta)
+  const lock = lockState(u);
+  if (u && lock.expired) await clearLock(u.id); // janela de segurança venceu: libera e segue
+  if (u && !u.is_support && lock.locked) throw new HttpError(423, LOCK_MESSAGE);
+  if (!u || !ok || !u.active || u.is_support) {
+    if (u && u.active && !u.is_support) {
+      const r2 = await onLoginFailure(u, { ip: req.ip });
+      if (r2.locked) throw new HttpError(423, LOCK_MESSAGE);
+    }
+    throw new HttpError(401, 'E-mail ou senha incorretos.'); // suporte nunca entra por senha
+  }
   clearHits(`login:id:${d.email}`);
+  await clearLock(u.id); // sucesso: zera o contador e remove qualquer bloqueio
   if (u.mfa_enabled) {
     const token = randomToken(24);
     await q("insert into login_challenges (token_hash, user_id, expires_at) values ($1,$2, now() + interval '5 minutes')", [sha256(token), u.id]);
@@ -101,6 +113,18 @@ r.post('/ecosystem/mfa', limitByIp('mfa', 30, 900), async (req, res) => {
   const d = parse(z.object({ mfa_token: z.string().min(20).max(1000), code: z.string().trim().min(6).max(20) }), req.body);
   const who = await ecoMfa(d.mfa_token, d.code, req.ip);
   await ecoRespond(req, res, who, await ecoEnter({ sv: who.sv, ip: req.ip, req }));
+});
+
+// ---- Desbloqueio de acesso (link enviado ao titular pela central) ----
+// GET mostra a página com um botão; só o POST (ação do usuário) libera — evita liberar por pré-visualização de e-mail.
+r.get('/unlock', limitByIp('unlock', 60, 900), (req, res) => {
+  const token = typeof req.query.token === 'string' ? req.query.token : '';
+  res.set('Content-Type', 'text/html; charset=utf-8').send(unlockPage(token));
+});
+r.post('/unlock', limitByIp('unlock-do', 30, 900), async (req, res) => {
+  const token = (typeof req.query.token === 'string' && req.query.token) || (typeof req.body?.token === 'string' && req.body.token) || '';
+  const userId = await consumeUnlockToken(token, req.ip);
+  res.set('Content-Type', 'text/html; charset=utf-8').send(unlockResultPage(!!userId));
 });
 
 r.post('/logout', async (req, res) => {
@@ -153,7 +177,7 @@ r.put('/password', denySupport, async (req, res) => {
   const u = await one('select password_hash from users where id=$1', [req.user.id]);
   if (!(await bcrypt.compare(d.current_password, u.password_hash))) throw new HttpError(400, 'A senha atual está incorreta.');
   if (d.current_password === d.new_password) throw new HttpError(400, 'A nova senha precisa ser diferente da atual.');
-  await q('update users set password_hash=$2, must_change_password=false where id=$1', [req.user.id, await bcrypt.hash(d.new_password, 12)]);
+  await q("update users set password_hash=$2, must_change_password=false, failed_logins=0, locked_at=null, lock_auto_until=null, login_fail_log='[]'::jsonb where id=$1", [req.user.id, await bcrypt.hash(d.new_password, 12)]);
   await revokeSessions(req.user.id, req.sessionId);
   await orgTx(req.orgId, (db) => audit(db, { actor: req.user, req, action: 'senha.alterada', entity: 'user', entityId: req.user.id, summary: 'Trocou a própria senha' }));
   res.json({ ok: true });

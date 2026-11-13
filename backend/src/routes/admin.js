@@ -188,7 +188,7 @@ users.post('/:id/reset-password', async (req, res) => {
   // conta usada em outras organizações: só o próprio dono da conta troca a senha
   if ((await one('select count(*)::int as n from memberships where user_id=$1', [id])).n > 1) throw new HttpError(409, 'Esta pessoa usa a mesma conta em outra organização: peça para ela trocar a senha em "Minha conta".');
   const temporary_password = tempPassword();
-  await q('update users set password_hash=$2, must_change_password=true, mfa_enabled=false, mfa_secret=null, recovery_codes=\'{}\' where id=$1', [id, await bcrypt.hash(temporary_password, 12)]);
+  await q('update users set password_hash=$2, must_change_password=true, mfa_enabled=false, mfa_secret=null, recovery_codes=\'{}\', failed_logins=0, locked_at=null, lock_auto_until=null, login_fail_log=\'[]\'::jsonb where id=$1', [id, await bcrypt.hash(temporary_password, 12)]);
   await revokeSessions(id);
   await orgTx(req.orgId, (db) => audit(db, { actor: actor(req), req, action: 'usuario.senha_redefinida', entity: 'user', entityId: id, summary: cur.name }));
   res.json({ temporary_password });
