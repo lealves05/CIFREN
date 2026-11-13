@@ -9,6 +9,7 @@ import { need, can, revokeSessions } from '../auth.js';
 import { CATALOG, ALL, isKnown } from '../permissions.js';
 import { audit } from '../audit.js';
 import { limitByKey } from '../security.js';
+import { tempPassword, sendTempPassword } from '../firstAccess.js';
 
 const actor = (req) => ({ id: req.user.id, name: req.user.name });
 const text = (max) => z.string().trim().max(max);
@@ -110,7 +111,6 @@ roles.delete('/:id', need('perfis.gerenciar'), async (req, res) => {
 // ---------------- usuários ----------------
 export const users = Router();
 users.use(need('usuarios.gerenciar'));
-const tempPassword = () => `Cf-${crypto.randomBytes(6).toString('base64url')}-${crypto.randomInt(10, 99)}`;
 async function roleByKey(req, key) {
   const r = await one('select id, key, name, permissions from roles where org_id=$1 and key=$2', [req.orgId, key]);
   if (!r) throw new HttpError(400, 'Perfil inválido.');
@@ -128,7 +128,7 @@ async function validCompanies(req, ids) {
   return list;
 }
 users.get('/', async (req, res) => {
-  const { rows } = await q(`select u.id, u.name, u.email, r.key as role_key, r.name as role_name, m.company_ids, m.active, m.last_login_at, u.mfa_enabled
+  const { rows } = await q(`select u.id, u.name, u.email, r.key as role_key, r.name as role_name, m.company_ids, m.active, m.last_login_at, u.mfa_enabled, u.must_change_password
                               from memberships m join users u on u.id=m.user_id join roles r on r.id=m.role_id
                              where m.org_id=$1 order by m.active desc, u.name`, [req.orgId]);
   res.json({ items: rows });
@@ -148,8 +148,13 @@ users.post('/', async (req, res) => {
     u = await one('insert into users (name, email, password_hash, must_change_password) values ($1,$2,$3,true) returning id, name', [d.name, d.email, await bcrypt.hash(temporary_password, 12)]);
   }
   await q('insert into memberships (org_id, user_id, role_id, company_ids) values ($1,$2,$3,$4)', [req.orgId, u.id, role.id, companyIds]);
-  await orgTx(req.orgId, (db) => audit(db, { actor: actor(req), req, action: 'usuario.convidado', entity: 'user', entityId: u.id, summary: `${d.name} (${d.email}) como ${role.name}` }));
-  res.status(201).json({ id: u.id, temporary_password, existing_account: !temporary_password });
+  // regra do ecossistema LORLER: a senha provisória vai por e-mail; só aparece na tela se o e-mail não sair
+  let invite = { sent: false, error: null };
+  if (temporary_password) {
+    try { await sendTempPassword({ name: d.name, email: d.email }, req.org?.name, { password: temporary_password }); invite = { sent: true, error: null }; } catch (e) { invite = { sent: false, error: e.message }; }
+  }
+  await orgTx(req.orgId, (db) => audit(db, { actor: actor(req), req, action: 'usuario.convidado', entity: 'user', entityId: u.id, summary: `${d.name} (${d.email}) como ${role.name}${temporary_password ? `; senha provisória ${invite.sent ? 'enviada por e-mail' : 'mostrada a quem convidou'}` : ''}` }));
+  res.status(201).json({ id: u.id, name: d.name, email: d.email, invite, existing_account: !temporary_password, ...(temporary_password && !invite.sent ? { temporary_password } : {}) });
 });
 async function ownersLeft(req, exceptUserId) {
   return (await one(`select count(*)::int as n from memberships m join roles r on r.id=m.role_id where m.org_id=$1 and r.key='dono' and m.active and m.user_id<>$2`, [req.orgId, exceptUserId])).n;
@@ -177,16 +182,18 @@ users.put('/:id', async (req, res) => {
 });
 users.post('/:id/reset-password', async (req, res) => {
   const id = uuidParam(req.params.id);
-  const cur = await one('select r.permissions, u.name from memberships m join roles r on r.id=m.role_id join users u on u.id=m.user_id where m.org_id=$1 and m.user_id=$2', [req.orgId, id]);
+  const cur = await one('select r.permissions, u.name, u.email from memberships m join roles r on r.id=m.role_id join users u on u.id=m.user_id where m.org_id=$1 and m.user_id=$2', [req.orgId, id]);
   if (!cur) throw notFound('Usuário não encontrado.');
   assertGrantable(req, cur.permissions);
   // conta usada em outras organizações: só o próprio dono da conta troca a senha
   if ((await one('select count(*)::int as n from memberships where user_id=$1', [id])).n > 1) throw new HttpError(409, 'Esta pessoa usa a mesma conta em outra organização: peça para ela trocar a senha em "Minha conta".');
   const temporary_password = tempPassword();
+  let invite = { sent: false, error: null };
+  try { await sendTempPassword({ name: cur.name, email: cur.email }, req.org?.name, { password: temporary_password, reset: true }); invite = { sent: true, error: null }; } catch (e) { invite = { sent: false, error: e.message }; }
   await q('update users set password_hash=$2, must_change_password=true, mfa_enabled=false, mfa_secret=null, recovery_codes=\'{}\' where id=$1', [id, await bcrypt.hash(temporary_password, 12)]);
   await revokeSessions(id);
-  await orgTx(req.orgId, (db) => audit(db, { actor: actor(req), req, action: 'usuario.senha_redefinida', entity: 'user', entityId: id, summary: cur.name }));
-  res.json({ temporary_password });
+  await orgTx(req.orgId, (db) => audit(db, { actor: actor(req), req, action: 'usuario.senha_redefinida', entity: 'user', entityId: id, summary: `${cur.name}; senha provisória ${invite.sent ? 'enviada por e-mail' : 'mostrada a quem redefiniu'}` }));
+  res.json({ invite, ...(invite.sent ? {} : { temporary_password }) });
 });
 
 // ---------------- auditoria ----------------

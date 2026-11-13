@@ -87,3 +87,30 @@ export default function Login() {
     </AuthShell>
   );
 }
+
+/** Primeiro acesso com a senha provisória recebida por e-mail: a pessoa cria a própria senha antes de usar o sistema. */
+export function FirstAccessPassword() {
+  const { user, refresh, logout } = useAuth();
+  const [f, setF] = useState({ current: '', password: '', confirm: '' });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async (e) => {
+    e.preventDefault(); setError('');
+    if (f.password !== f.confirm) { setError('As senhas não conferem.'); return; }
+    if (f.password === f.current) { setError('A nova senha precisa ser diferente da senha provisória.'); return; }
+    setBusy(true);
+    try { await api.put('/auth/password', { current_password: f.current, new_password: f.password }); await refresh(); } catch (e2) { setError(errorMessage(e2)); } finally { setBusy(false); }
+  };
+  return (
+    <AuthShell title="Crie sua senha" subtitle={`Olá, ${String(user?.name || '').split(' ')[0]}! Você entrou com a senha provisória que chegou por e-mail. Para continuar, crie uma senha só sua.`}>
+      <form onSubmit={submit} className="space-y-4" noValidate>
+        <InlineError error={error} />
+        <Input label="Senha provisória (a do e-mail)" type="password" autoComplete="current-password" value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} autoFocus required />
+        <Input label="Nova senha" type="password" autoComplete="new-password" hint="Mínimo de 10 caracteres, com letras e números." value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required />
+        <Input label="Repita a nova senha" type="password" autoComplete="new-password" value={f.confirm} onChange={(e) => setF({ ...f, confirm: e.target.value })} required />
+        <SubmitButton loading={busy} className="btn-primary w-full">Salvar e continuar</SubmitButton>
+        <button type="button" className="btn-ghost w-full" onClick={logout}>Sair</button>
+      </form>
+    </AuthShell>
+  );
+}

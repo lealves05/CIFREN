@@ -7,7 +7,7 @@ import { Mark } from './components/Brand';
 import { firstAllowed } from './lib/nav';
 import { P, APPROVER_PERMS } from './lib/permissions';
 import Blocked from './pages/Blocked';
-import Login from './pages/Login';
+import Login, { FirstAccessPassword } from './pages/Login';
 import Signup from './pages/Signup';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -51,9 +51,10 @@ function Splash() {
 }
 
 function RequireAuth({ children }) {
-  const { status } = useAuth();
+  const { status, user } = useAuth();
   const location = useLocation();
   if (status === 'loading') return <Splash />;
+  if (user?.must_change_password && status !== 'guest') return <FirstAccessPassword />; // senha provisória: cria a própria senha antes de tudo
   if (status === 'blocked') return <Blocked />;
   if (status !== 'ready') return <Navigate to="/entrar" replace state={{ from: location.pathname + location.search }} />;
   return children;

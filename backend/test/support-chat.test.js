@@ -6,7 +6,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 
 const SECRET = 'segredo-de-teste-da-central-atendimento-0123';
-const calls = [];
+const calls = []; const mails = [];
 let reply = null; // resposta forçada da próxima chamada de chat: { status, body }
 const fake = http.createServer((req, res) => {
   let raw = '';
@@ -17,6 +17,7 @@ const fake = http.createServer((req, res) => {
     const want = crypto.createHmac('sha256', SECRET).update(`${ts}\n${req.method}\n${route}\n${crypto.createHash('sha256').update(raw).digest('hex')}`).digest('hex');
     const send = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
     if (req.headers['x-platform-signature'] !== want || req.headers['x-platform-product'] !== 'cifren') return send(401, { error: 'assinatura' });
+    if (route === '/mail/account') { mails.push(JSON.parse(raw)); return send(200, { ok: true }); } // e-mails de acesso (senha provisória)
     if (!route.startsWith('/support/')) return send(200, { access: { status: 'ACTIVE', blocked: false } }); // cadastro/situação da organização
     calls.push({ method: req.method, route, body: raw ? JSON.parse(raw) : null });
     if (reply) { const r = reply; reply = null; return send(r.status, r.body); }
@@ -58,9 +59,15 @@ test('suporte: usuário e organização vêm da sessão, não do corpo', async (
 
   // perfil sem "alterar configurações" e que não é Dono/Administrador
   const inv = await A.post('/api/users', { name: 'Lu Lança', email: 'lu@sc.com', role_key: 'lancamentos' });
+  // regra do ecossistema: com a central ligada, a senha provisória vai por e-mail (modelo user-temp-password) e não volta para a tela
+  const mail = mails.at(-1);
+  assert.equal(mail.kind, 'user-temp-password'); assert.equal(mail.to, 'lu@sc.com'); assert.match(mail.password, /^[A-Za-z0-9]{12}$/);
+  assert.equal(inv.data.invite.sent, true); assert.equal(inv.data.temporary_password, undefined);
+  const temp = mail.password;
   const U = client(env.base);
-  await U.post('/api/auth/login', { email: 'lu@sc.com', password: inv.data.temporary_password });
-  await U.put('/api/auth/password', { current_password: inv.data.temporary_password, new_password: PASS });
+  await U.post('/api/auth/login', { email: 'lu@sc.com', password: temp });
+  assert.equal((await U.get('/api/support-chat')).data.code, 'PASSWORD_CHANGE_REQUIRED', 'com a senha provisória, nada abre antes de criar a senha nova');
+  await U.put('/api/auth/password', { current_password: temp, new_password: PASS });
   assert.equal((await U.get('/api/support-chat')).status, 200);
   assert.equal(last().route, `/support/tenants/${me.org.id}/chat`);
   const id = crypto.randomUUID();

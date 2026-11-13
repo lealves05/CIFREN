@@ -28,19 +28,24 @@ function InviteModal({ open, onClose, roles, onSaved }) {
     setSaving(true);
     try {
       const res = await api.post('/users', { name: f.name.trim(), email: f.email.trim(), role_key: f.role_key, company_ids: f.company_ids });
-      setResult({ password: res?.temporary_password, email: f.email.trim() });
+      setResult({ password: res?.temporary_password, email: f.email.trim(), sent: !!res?.invite?.sent, existing: !!res?.existing_account, error: res?.invite?.error });
       onSaved();
     } catch (e) { setError(errorMessage(e)); } finally { setSaving(false); }
   };
   if (result) {
     return (
-      <Modal open={open} onClose={onClose} title="Usuário criado" footer={<button type="button" className="btn-primary" onClick={onClose}>Já copiei, fechar</button>}>
-        <TempPassword password={result.password} email={result.email} />
+      <Modal open={open} onClose={onClose} title="Usuário criado" footer={<button type="button" className="btn-primary" onClick={onClose}>{result.password ? 'Já copiei, fechar' : 'Fechar'}</button>}>
+        {result.password ? <>
+          <p className="mb-3 text-sm text-ink-soft">O e-mail com a senha provisória não foi enviado{result.error ? ` (${result.error})` : ''}. Repasse a senha abaixo.</p>
+          <TempPassword password={result.password} email={result.email} />
+        </> : result.existing
+          ? <p className="text-sm">Esta pessoa já tem conta no CIFREN. Ela entra com a senha que já usa e passa a ver esta organização.</p>
+          : <p className="text-sm">Enviamos para <strong>{result.email}</strong> uma <strong>senha provisória</strong>. No primeiro acesso o CIFREN pede para a pessoa criar a própria senha.</p>}
       </Modal>
     );
   }
   return (
-    <Modal open={open} onClose={onClose} onSubmit={submit} title="Convidar usuário" subtitle="A pessoa recebe uma senha temporária e troca no primeiro acesso."
+    <Modal open={open} onClose={onClose} onSubmit={submit} title="Convidar usuário" subtitle="A pessoa recebe por e-mail uma senha provisória e troca no primeiro acesso."
       footer={<><button type="button" className="btn-outline" onClick={onClose}>Cancelar</button><SubmitButton loading={saving}>Criar acesso</SubmitButton></>}>
       <div className="space-y-4">
         <InlineError error={error} />
@@ -102,11 +107,13 @@ export default function UsersTab({ roles }) {
   const roleOptions = roles.length ? roles : [...new Map(users.map((u) => [u.role_key, { key: u.role_key, name: u.role_name }])).values()];
 
   const doReset = async (u) => {
-    const ok = await confirm({ title: `Gerar nova senha para ${u.name}?`, message: 'A senha atual deixa de funcionar e a pessoa precisará da nova senha temporária para entrar.', confirmText: 'Gerar nova senha' });
+    const ok = await confirm({ title: `Enviar nova senha provisória para ${u.name}?`, message: `A senha atual deixa de funcionar. ${u.email} recebe por e-mail uma senha provisória e troca no primeiro acesso.`, confirmText: 'Enviar nova senha' });
     if (!ok) return;
     try {
       const res = await api.post(`/users/${u.id}/reset-password`);
-      setReset({ email: u.email, password: res?.temporary_password });
+      if (res?.temporary_password) setReset({ email: u.email, password: res.temporary_password });
+      else toast(`Senha provisória enviada para ${u.email}.`);
+      reload();
     } catch (e) { toast(errorMessage(e), 'error'); }
   };
 
@@ -125,7 +132,7 @@ export default function UsersTab({ roles }) {
               <Avatar name={u.name} />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                  {u.name}{u.id === me?.id && <Badge>Você</Badge>}{u.active === false && <Badge tone="danger">Desativado</Badge>}
+                  {u.name}{u.id === me?.id && <Badge>Você</Badge>}{u.active === false && <Badge tone="danger">Desativado</Badge>}{u.must_change_password && u.id !== me?.id && <Badge tone="warn">Aguardando 1º acesso</Badge>}
                   {u.mfa_enabled && <span title="Verificação em duas etapas ativa" className="text-positive"><ShieldCheck className="h-4 w-4" aria-hidden="true" /><span className="sr-only">Verificação em duas etapas ativa</span></span>}
                 </div>
                 <div className="truncate text-xs text-ink-faint">{u.email} · {u.role_name}{Array.isArray(u.company_ids) && ` · ${u.company_ids.length} empresa(s)`}</div>
@@ -141,7 +148,7 @@ export default function UsersTab({ roles }) {
       )}
       <InviteModal open={invite} onClose={() => setInvite(false)} roles={roleOptions} onSaved={reload} />
       <EditModal open={!!edit} onClose={() => setEdit(null)} user={edit} roles={roleOptions} onSaved={reload} isSelf={edit?.id === me?.id} />
-      <Modal open={!!reset} onClose={() => setReset(null)} title="Nova senha temporária" footer={<button type="button" className="btn-primary" onClick={() => setReset(null)}>Já copiei, fechar</button>}>
+      <Modal open={!!reset} onClose={() => setReset(null)} title="O e-mail não saiu: repasse a senha provisória" footer={<button type="button" className="btn-primary" onClick={() => setReset(null)}>Já copiei, fechar</button>}>
         {reset && <TempPassword password={reset.password} email={reset.email} />}
       </Modal>
     </div>
