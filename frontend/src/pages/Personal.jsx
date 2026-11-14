@@ -263,13 +263,15 @@ function ImportModal({ space, accounts, cats, onClose, onDone }) {
     try {
       const content_base64 = await fileToBase64(file);
       const res = await api.post(`${base}/import/preview`, { account_id: accountId, filename: file.name, content_base64 });
-      setPreview({ ...res, lines: res.lines.map((l) => ({ ...l, checked: !l.duplicate })) });
+      setPreview({ ...res, lines: res.lines.map((l) => ({ ...l, checked: !l.duplicate, category_id: '' })) });
     } catch (e2) { setErr(errorMessage(e2)); } finally { setBusy(false); e.target.value = ''; }
   };
   const toggle = (i) => setPreview((p) => ({ ...p, lines: p.lines.map((l, j) => (j === i ? { ...l, checked: !l.checked } : l)) }));
+  const setLineCat = (i, catId) => setPreview((p) => ({ ...p, lines: p.lines.map((l, j) => (j === i ? { ...l, category_id: catId } : l)) }));
+  const applyCatToAll = (catId) => { setDefaultCat(catId); setPreview((p) => (p ? { ...p, lines: p.lines.map((l) => (l.type === 'despesa' ? { ...l, category_id: catId } : l)) } : p)); };
   const commit = async () => {
     const lines = preview.lines.filter((l) => l.checked && !l.duplicate)
-      .map((l) => ({ date: l.date, amount: l.amount, type: l.type, description: l.description, line_hash: l.line_hash, category_id: l.type === 'despesa' ? (defaultCat || null) : null }));
+      .map((l) => ({ date: l.date, amount: l.amount, type: l.type, description: l.description, line_hash: l.line_hash, category_id: l.type === 'despesa' ? (l.category_id || null) : null }));
     if (!lines.length) { setErr('Nenhuma linha nova selecionada.'); return; }
     setBusy(true); setErr('');
     try { const r = await api.post(`${base}/import/commit`, { account_id: accountId, lines }); toast(`${r.imported} lançamento(s) importado(s).`); onDone(); }
@@ -303,19 +305,22 @@ function ImportModal({ space, accounts, cats, onClose, onDone }) {
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <Badge tone="brand">{preview.format.toUpperCase()}</Badge>
               <span>{preview.total} lançamento(s): <b className="text-positive">{preview.novos} novo(s)</b>{preview.duplicados > 0 && <>, <b className="text-ink-faint">{preview.duplicados} já importado(s)</b></>}</span>
-              {expenseCats.length > 0 && <span className="ml-auto flex items-center gap-1">Categoria das saídas:
-                <select className="input h-8 w-40 py-0 text-sm" value={defaultCat} onChange={(e) => setDefaultCat(e.target.value)}><option value="">Sem categoria</option>{expenseCats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+              {expenseCats.length > 0 && <span className="ml-auto flex items-center gap-1">Aplicar a todas as saídas:
+                <select className="input h-8 w-40 py-0 text-sm" value={defaultCat} onChange={(e) => applyCatToAll(e.target.value)}><option value="">Sem categoria</option>{expenseCats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
               </span>}
             </div>
             <div className="max-h-80 overflow-auto rounded-app-sm border border-line">
               <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-surface"><tr className="border-b border-line text-left text-xs text-ink-faint"><th className="p-2" /><th className="p-2">Data</th><th className="p-2">Descrição</th><th className="p-2 text-right">Valor</th></tr></thead>
+                <thead className="sticky top-0 bg-surface"><tr className="border-b border-line text-left text-xs text-ink-faint"><th className="p-2" /><th className="p-2">Data</th><th className="p-2">Descrição</th><th className="p-2">Categoria</th><th className="p-2 text-right">Valor</th></tr></thead>
                 <tbody>
                   {preview.lines.map((l, i) => (
                     <tr key={i} className={cx('border-b border-line/60', l.duplicate && 'opacity-50')}>
                       <td className="p-2"><input type="checkbox" className="h-4 w-4 accent-[var(--brand)]" checked={l.checked} disabled={l.duplicate} onChange={() => toggle(i)} /></td>
                       <td className="whitespace-nowrap p-2">{date(l.date)}</td>
                       <td className="p-2">{l.description || '—'}{l.duplicate && <Badge>já importado</Badge>}</td>
+                      <td className="p-2">{l.type === 'despesa'
+                        ? <select className="input h-7 w-36 py-0 text-xs" value={l.category_id || ''} disabled={l.duplicate} onChange={(e) => setLineCat(i, e.target.value)} aria-label="Categoria do gasto"><option value="">Sem categoria</option>{expenseCats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+                        : <span className="text-ink-faint">—</span>}</td>
                       <td className={cx('whitespace-nowrap p-2 text-right tabular-nums', l.type === 'receita' ? 'text-positive' : 'text-danger')}>{l.type === 'receita' ? '+' : '−'}{money(l.amount)}</td>
                     </tr>
                   ))}
