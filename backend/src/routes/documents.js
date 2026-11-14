@@ -117,7 +117,7 @@ documents.get('/:id', need('documentos.visualizar'), async (req, res) => {
 });
 documents.get('/:id/file', need('documentos.visualizar'), async (req, res) => {
   const d = await orgTx(req.orgId, (db) => load(db, req, req.params.id));
-  if (!d.content) throw notFound('Este documento não tem arquivo (foi lido de um código).');
+  if (!d.content) throw notFound(d.status === 'vinculado' && d.kind === 'comprovante' ? 'A imagem do comprovante foi descartada após o lançamento; ficou salvo apenas o texto/dados.' : 'Este documento não tem arquivo (foi lido de um código).');
   const safe = String(d.filename || 'documento').replace(/[^\w.\- ]+/g, '_').slice(0, 120);
   res.set({ 'Content-Type': d.mime || 'application/octet-stream', 'Content-Disposition': `${req.query.download === '1' ? 'attachment' : 'inline'}; filename="${safe}"`,
     'X-Content-Type-Options': 'nosniff', // PDF não abre no visualizador do navegador dentro de "sandbox"; imagens e o resto ficam isolados
@@ -219,7 +219,8 @@ documents.post('/:id/create-titles', need('financeiro.titulos.criar'), async (re
       await db.query("insert into document_links (org_id, document_id, entity, entity_id) values ($1,$2,'title',$3) on conflict do nothing", [req.orgId, d.id, t.id]);
     }
     if (approval) await requestApproval(db, req, { entity: 'title', entityId: ids[0], companyId: d.company_id, amount: total, summary: `${label}: R$ ${total.toFixed(2)}` });
-    await db.query("update documents set status='vinculado', updated_at=now() where id=$1", [d.id]);
+    // Após lançado: comprovante informal perde o arquivo original (fica só o texto/vínculo); NF-e e boleto são guardados (exigência fiscal).
+    await db.query("update documents set status='vinculado', content = case when kind = 'comprovante' then null else content end, updated_at=now() where id=$1", [d.id]);
     await audit(db, { actor: actor(req), req, action: 'documento.lancado', entity: 'document', entityId: d.id, summary: `${label}: ${dues.length} conta(s), R$ ${total.toFixed(2)}`, data: { ids } });
     return { ids, approval_status: approval ? 'pendente' : null };
   });
@@ -235,7 +236,8 @@ documents.post('/:id/link', need('documentos.enviar', 'documentos.gerenciar'), a
     if (!target || !companyAllowed(req, target.company_id)) throw notFound('Registro não encontrado.');
     if (d.company_id && d.company_id !== target.company_id) throw new HttpError(400, 'O documento é de outra empresa.');
     await db.query('insert into document_links (org_id, document_id, entity, entity_id) values ($1,$2,$3,$4) on conflict do nothing', [req.orgId, d.id, b.entity, b.id]);
-    await db.query("update documents set status='vinculado', updated_at=now() where id=$1", [d.id]);
+    // Após lançado: comprovante informal perde o arquivo original (fica só o texto/vínculo); NF-e e boleto são guardados (exigência fiscal).
+    await db.query("update documents set status='vinculado', content = case when kind = 'comprovante' then null else content end, updated_at=now() where id=$1", [d.id]);
     await audit(db, { actor: actor(req), req, action: 'documento.vinculado', entity: 'document', entityId: d.id, summary: `${d.filename} → ${b.entity}` });
   });
   res.json({ ok: true });

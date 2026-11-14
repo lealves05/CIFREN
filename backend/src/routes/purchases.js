@@ -102,7 +102,7 @@ purchases.post('/:id/invoice', need('compras.gerenciar'), async (req, res) => {
       ids.push(t.id);
       if (d.document_id) await db.query("insert into document_links (org_id, document_id, entity, entity_id) values ($1,$2,'title',$3) on conflict do nothing", [req.orgId, d.document_id, t.id]);
     }
-    if (d.document_id) { await db.query("insert into document_links (org_id, document_id, entity, entity_id) values ($1,$2,'purchase',$3) on conflict do nothing", [req.orgId, d.document_id, p.id]); await db.query("update documents set status='vinculado' where id=$1", [d.document_id]); }
+    if (d.document_id) { await db.query("insert into document_links (org_id, document_id, entity, entity_id) values ($1,$2,'purchase',$3) on conflict do nothing", [req.orgId, d.document_id, p.id]); await db.query("update documents set status='vinculado', content = case when kind = 'comprovante' then null else content end where id=$1", [d.document_id]); }
     const r = await db.one("update purchases set status='faturada', title_ids=$2, total=$3, updated_at=now() where id=$1 returning *", [p.id, ids, total]);
     await audit(db, { actor: actor(req), req, action: 'compra.faturada', entity: 'purchase', entityId: p.id, summary: `Compra nº ${p.number} faturada: R$ ${total.toFixed(2)} em ${d.installments} parcela(s)` });
     return pShape(db, r);
