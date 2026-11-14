@@ -389,10 +389,16 @@ function AccountsTab({ space }) {
   const cats = useAsync(() => api.get(`${base}/categories`), [space.id]);
   const [accModal, setAccModal] = useState(null);
   const [catModal, setCatModal] = useState(null);
+  const [txModal, setTxModal] = useState(null);
   const editable = canEdit(space.role);
   const removeAcc = async (a) => { if (!(await confirm({ title: `Remover ${a.name}?`, message: 'Se houver lançamentos, a conta é arquivada.', confirmText: 'Remover' }))) return;
     try { await api.del(`${base}/accounts/${a.id}`); accounts.reload(); } catch (e) { toast(errorMessage(e), 'error'); } };
   const removeCat = async (c) => { try { await api.del(`${base}/categories/${c.id}`); cats.reload(); } catch (e) { toast(errorMessage(e), 'error'); } };
+  // Lançar direto de uma categoria: abre o formulário de lançamento já com a categoria e o tipo certos.
+  const launch = (c) => {
+    if (!(accounts.data?.items || []).some((a) => !a.archived)) { toast('Crie uma conta primeiro para lançar.', 'error'); return; }
+    setTxModal({ type: c.type === 'receita' ? 'receita' : 'despesa', category_id: c.id });
+  };
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <section>
@@ -413,6 +419,7 @@ function AccountsTab({ space }) {
       </section>
       <section>
         <div className="mb-2 flex items-center justify-between"><h3 className="text-sm font-semibold">Categorias</h3>{editable && <button type="button" className="btn-outline btn-sm" onClick={() => setCatModal({ type: 'despesa' })}><Plus className="h-4 w-4" aria-hidden="true" /> Categoria</button>}</div>
+        {editable && <p className="mb-2 text-xs text-ink-faint">Clique numa categoria para lançar direto nela.</p>}
         {cats.loading && !cats.data ? <Loading /> : (
           <div className="grid grid-cols-2 gap-4">
             {['despesa', 'receita'].map((type) => (
@@ -420,8 +427,16 @@ function AccountsTab({ space }) {
                 <h4 className="mb-1 text-xs font-semibold text-ink-faint">{type === 'despesa' ? 'Saídas' : 'Entradas'}</h4>
                 <ul className="space-y-0.5">
                   {(cats.data?.items || []).filter((c) => c.type === type && !c.archived).map((c) => (
-                    <li key={c.id} className="group flex items-center justify-between rounded-app-sm px-2 py-1 text-sm hover:bg-line/40"><span>{c.name}</span>
-                      {editable && <button type="button" className="btn-ghost btn-icon opacity-0 group-hover:opacity-100" onClick={() => removeCat(c)} aria-label={`Remover ${c.name}`}><Trash2 className="h-3.5 w-3.5" aria-hidden="true" /></button>}
+                    <li key={c.id} className="group flex items-center justify-between gap-1 rounded-app-sm px-2 py-1 text-sm hover:bg-line/40">
+                      {editable
+                        ? <button type="button" className="min-w-0 flex-1 truncate text-left hover:text-brand" onClick={() => launch(c)} title={`Lançar em ${c.name}`}>{c.name}</button>
+                        : <span className="min-w-0 flex-1 truncate">{c.name}</span>}
+                      {editable && (
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
+                          <button type="button" className="btn-ghost btn-icon text-brand" onClick={() => launch(c)} aria-label={`Lançar em ${c.name}`} title={`Lançar em ${c.name}`}><Plus className="h-3.5 w-3.5" aria-hidden="true" /></button>
+                          <button type="button" className="btn-ghost btn-icon text-danger" onClick={() => removeCat(c)} aria-label={`Remover ${c.name}`}><Trash2 className="h-3.5 w-3.5" aria-hidden="true" /></button>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -432,6 +447,8 @@ function AccountsTab({ space }) {
       </section>
       {accModal && <AccountModal space={space} acc={accModal} onClose={() => setAccModal(null)} onSaved={() => { setAccModal(null); accounts.reload(); }} />}
       {catModal && <CategoryModal space={space} cat={catModal} onClose={() => setCatModal(null)} onSaved={() => { setCatModal(null); cats.reload(); }} />}
+      {txModal && <TxModal space={space} tx={txModal} accounts={(accounts.data?.items || []).filter((a) => !a.archived)} cats={cats.data?.items || []}
+        onClose={() => setTxModal(null)} onSaved={() => { setTxModal(null); accounts.reload(); toast('Lançamento criado nesta categoria.', 'success'); }} />}
     </div>
   );
 }
